@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}{{ section.title }} — {{ config.title }}{% endblock %}
+{% block description %}{{ section.description | default(value=config.description) }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{{ section.title }}</h1>
+  {% if section.description %}
+  <p class="page-description">{{ section.description }}</p>
+  {% endif %}
+</div>
+
+<div class="section-content">
+  {{ section.content | safe }}
+
+  {% if section.subsections %}
+  <div class="section-grid">
+    {% for subsection_path in section.subsections %}
+      {% set subsection = get_section(path=subsection_path) %}
+      <a href="{{ subsection.permalink | safe }}" class="section-card">
+        <h3>{{ subsection.title }}</h3>
+        {% if subsection.description %}
+          <p>{{ subsection.description }}</p>
+        {% endif %}
+        <span class="page-count">{{ subsection.pages | length }} page{{ subsection.pages | length | pluralize }}</span>
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if section.pages %}
+  <div class="pages-list">
+    {% for page in section.pages %}
+    <a href="{{ page.permalink | safe }}" class="page-card">
+      <div class="page-card-content">
+        <h3>{{ page.title }}</h3>
+        {% if page.description %}
+          <p>{{ page.description }}</p>
+        {% endif %}
+        <div class="page-meta">
+          {% if page.date %}
+          <span class="meta-date">{{ page.date | date(format="%B %d, %Y") }}</span>
+          {% endif %}
+          {% if page.taxonomies.tags %}
+          <span class="meta-tags">
+            {% for tag in page.taxonomies.tags %}
+            <span class="tag">{{ tag }}</span>
+            {% endfor %}
+          </span>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

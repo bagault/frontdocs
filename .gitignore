@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+src-tauri/target/
+
+# Zola sidecar binaries (downloaded per-platform)
+src-tauri/binaries/zola-*
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

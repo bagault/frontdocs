@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicoulaj/tauri/v2/core/tauri/permissions/schemas/schema.json",
+  "identifier": "default",
+  "description": "Default capability for Frontdocs",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "shell:allow-execute",
+    "shell:allow-spawn",
+    "shell:allow-stdin-write",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/zola",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-ask",
+    "fs:allow-read",
+    "fs:allow-write",
+    "fs:allow-exists",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-rename",
+    "fs:allow-copy-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$TEMP/**" }
+      ]
+    }
+  ]
+}
