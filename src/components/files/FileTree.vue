@@ -3,7 +3,13 @@
     <div
       v-if="node.is_dir"
       class="tree-item tree-folder"
+      :class="{ 'drag-over': isDragOver }"
+      draggable="true"
       @click="expanded = !expanded"
+      @dragstart="onDragStart"
+      @dragover.prevent="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
     >
       <v-icon size="18" class="mr-1">
         {{ expanded ? 'mdi-chevron-down' : 'mdi-chevron-right' }}
@@ -11,21 +17,49 @@
       <v-icon size="18" class="mr-2" color="primary">
         {{ expanded ? 'mdi-folder-open' : 'mdi-folder' }}
       </v-icon>
-      <span class="text-body-2 text-truncate">{{ node.name }}</span>
+      <span class="text-body-2 text-truncate flex-grow-1">{{ node.name }}</span>
+      <v-btn
+        icon
+        size="x-small"
+        variant="text"
+        class="tree-action"
+        @click.stop="$emit('requestDelete', node)"
+      >
+        <v-icon size="16" color="error">mdi-delete-outline</v-icon>
+      </v-btn>
     </div>
 
     <div
       v-else
       class="tree-item tree-file"
       :class="{ active: selectedPath === node.path }"
+      draggable="true"
       @click="$emit('select', node.path)"
+      @dragstart="onDragStart"
     >
       <v-icon size="18" class="mr-2 ml-5" color="info">mdi-language-markdown</v-icon>
-      <span class="text-body-2 text-truncate">{{ node.name }}</span>
+      <span class="text-body-2 text-truncate flex-grow-1">{{ node.name }}</span>
+      <v-btn
+        icon
+        size="x-small"
+        variant="text"
+        class="tree-action"
+        @click.stop="$emit('requestDelete', node)"
+      >
+        <v-icon size="16" color="error">mdi-delete-outline</v-icon>
+      </v-btn>
     </div>
   </div>
 
-  <div v-if="node.is_dir && (expanded || root)" class="tree-children" :class="{ 'ml-2': !root }">
+  <!-- Root folder acts as a drop target too -->
+  <div
+    v-if="node.is_dir && (expanded || root)"
+    class="tree-children"
+    :class="{ 'ml-2': !root, 'drag-over': root && isDragOver }"
+    @dragover.prevent="root ? onDragOver($event) : undefined"
+    @dragleave="root ? onDragLeave($event) : undefined"
+    @drop.prevent="root ? onDrop($event) : undefined"
+  >
     <FileTree
       v-for="child in node.children"
       :key="child.path"
@@ -33,6 +67,8 @@
       :selected-path="selectedPath"
       :root="false"
       @select="(path: string) => $emit('select', path)"
+      @move="(source: string, dest: string) => $emit('move', source, dest)"
+      @request-delete="(n: any) => $emit('requestDelete', n)"
     />
   </div>
 </template>
@@ -47,11 +83,54 @@ const props = defineProps<{
   root?: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   select: [path: string];
+  move: [source: string, destination: string];
+  requestDelete: [node: FileTreeNode];
 }>();
 
 const expanded = ref(true);
+const isDragOver = ref(false);
+
+function onDragStart(event: DragEvent) {
+  if (event.dataTransfer) {
+    event.dataTransfer.setData('text/plain', props.node.path);
+    event.dataTransfer.effectAllowed = 'move';
+  }
+}
+
+function onDragOver(event: DragEvent) {
+  if (props.node.is_dir) {
+    isDragOver.value = true;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  }
+}
+
+function onDragLeave(_event: DragEvent) {
+  isDragOver.value = false;
+}
+
+function onDrop(event: DragEvent) {
+  isDragOver.value = false;
+  if (!props.node.is_dir || !event.dataTransfer) return;
+
+  const sourcePath = event.dataTransfer.getData('text/plain');
+  if (!sourcePath || sourcePath === props.node.path) return;
+
+  // Don't drop a folder into itself
+  if (props.node.path.startsWith(sourcePath + '/')) return;
+
+  // Extract filename from source path
+  const parts = sourcePath.replace(/\\/g, '/').split('/');
+  const fileName = parts[parts.length - 1];
+  const destPath = props.node.path.replace(/\\/g, '/') + '/' + fileName;
+
+  if (sourcePath !== destPath) {
+    emit('move', sourcePath, destPath);
+  }
+}
 </script>
 
 <style scoped>
@@ -70,7 +149,24 @@ const expanded = ref(true);
 .tree-item.active {
   background: rgba(0, 0, 140, 0.25);
 }
+.tree-item.drag-over {
+  background: rgba(92, 124, 250, 0.2);
+  outline: 1px dashed rgba(92, 124, 250, 0.5);
+}
 .tree-children {
   border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+.tree-children.drag-over {
+  background: rgba(92, 124, 250, 0.1);
+}
+.tree-action {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.tree-item:hover .tree-action {
+  opacity: 0.7;
+}
+.tree-action:hover {
+  opacity: 1 !important;
 }
 </style>

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicoulaj/tauri/v2/tooling/cli/schema.json",
   "productName": "Frontdocs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.frontdocs.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -32,7 +32,7 @@
       "../assets/logo.png",
       "../assets/logo.ico"
     ],
-    "externalBin": ["binaries/zola"]
+    "externalBin": ["binaries/mdbook"]
   },
   "plugins": {
     "shell": {

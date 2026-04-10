@@ -5,8 +5,8 @@ node_modules/
 dist/
 src-tauri/target/
 
-# Zola sidecar binaries (downloaded per-platform)
-src-tauri/binaries/zola-*
+# mdBook sidecar binaries (downloaded per-platform)
+src-tauri/binaries/mdbook-*
 
 # Environment
 .env

@@ -59,9 +59,22 @@
         :key="idx"
         class="ai-msg-block"
       >
-        <div class="ai-message" :class="msg.role">
-          <div v-if="msg.role === 'assistant'" class="md-preview text-body-2" v-html="renderMsg(msg.content)" />
-          <div v-else class="text-body-2">{{ msg.content }}</div>
+        <div class="ai-message-wrapper" :class="msg.role">
+          <div class="ai-message" :class="msg.role">
+            <div v-if="msg.role === 'assistant'" class="md-preview text-body-2" v-html="renderMsg(msg.content)" />
+            <div v-else class="text-body-2">{{ msg.content }}</div>
+          </div>
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            class="ai-copy-btn"
+            :class="msg.role"
+            @click="copyMessage(msg.content)"
+            title="Copy to clipboard"
+          >
+            <v-icon size="14">mdi-content-copy</v-icon>
+          </v-btn>
         </div>
 
         <!-- File action buttons -->
@@ -194,6 +207,15 @@ const quickActions = [
 
 function renderMsg(content: string): string {
   return marked.parse(content, { async: false }) as string;
+}
+
+async function copyMessage(content: string) {
+  try {
+    await navigator.clipboard.writeText(content);
+    appStore.showMessage('Copied to clipboard');
+  } catch {
+    appStore.showMessage('Failed to copy', 'error');
+  }
 }
 
 function scrollToBottom() {
@@ -394,5 +416,31 @@ async function doGeneratePage() {
 }
 .ai-msg-block {
   margin-bottom: 8px;
+}
+.ai-message-wrapper {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+
+  &.user {
+    flex-direction: row-reverse;
+  }
+}
+.ai-copy-btn {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+  margin-top: 8px;
+
+  &.user {
+    color: white;
+  }
+}
+.ai-message-wrapper:hover .ai-copy-btn {
+  opacity: 0.6;
+}
+.ai-copy-btn:hover {
+  opacity: 1 !important;
 }
 </style>

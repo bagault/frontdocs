@@ -40,6 +40,8 @@
           :selected-path="appStore.currentFile?.path"
           :root="true"
           @select="handleFileSelect"
+          @move="handleMove"
+          @request-delete="handleRequestDelete"
         />
         <div v-else class="text-center pa-4 text-medium-emphasis">
           <v-icon size="48" class="mb-2">mdi-file-tree-outline</v-icon>
@@ -78,19 +80,44 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Delete confirmation dialog -->
+    <v-dialog v-model="showDeleteDialog" max-width="440">
+      <v-card>
+        <v-card-title class="text-h6">
+          Delete {{ deleteTarget?.is_dir ? 'Folder' : 'File' }}
+        </v-card-title>
+        <v-card-text>
+          <p>
+            Are you sure you want to permanently delete
+            <strong>{{ deleteTarget?.name }}</strong>{{ deleteTarget?.is_dir ? ' and all its contents' : '' }}?
+          </p>
+          <p class="text-caption text-error mt-2">This action cannot be undone.</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="showDeleteDialog = false">Cancel</v-btn>
+          <v-btn color="error" @click="confirmDelete">Delete</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-navigation-drawer>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/app';
 import FileTree from '../files/FileTree.vue';
+import type { FileTreeNode } from '../../types';
 
 const appStore = useAppStore();
 
 const showNewFile = ref(false);
 const newFileName = ref('');
 const newFileTemplate = ref('blank');
+const showDeleteDialog = ref(false);
+const deleteTarget = ref<FileTreeNode | null>(null);
 
 const templates = [
   { label: 'Blank page', value: 'blank' },
@@ -101,27 +128,10 @@ const templates = [
 ];
 
 const templateContent: Record<string, string> = {
-  blank: `+++
-title = ""
-date = "${new Date().toISOString().split('T')[0]}"
-description = ""
-
-[taxonomies]
-tags = []
-+++
+  blank: `# Untitled
 
 `,
-  research: `+++
-title = ""
-date = "${new Date().toISOString().split('T')[0]}"
-description = ""
-
-[taxonomies]
-tags = ["research"]
-
-[extra]
-status = "draft"
-+++
+  research: `# Research Note
 
 ## Abstract
 
@@ -139,14 +149,7 @@ status = "draft"
 
 ## References
 `,
-  review: `+++
-title = "Literature Review: "
-date = "${new Date().toISOString().split('T')[0]}"
-description = ""
-
-[taxonomies]
-tags = ["literature-review"]
-+++
+  review: `# Literature Review
 
 ## Overview
 
@@ -164,14 +167,7 @@ tags = ["literature-review"]
 
 ## Bibliography
 `,
-  method: `+++
-title = ""
-date = "${new Date().toISOString().split('T')[0]}"
-description = ""
-
-[taxonomies]
-tags = ["methodology"]
-+++
+  method: `# Method Description
 
 ## Overview
 
@@ -197,17 +193,9 @@ tags = ["methodology"]
 
 ## References
 `,
-  meeting: `+++
-title = "Meeting Notes: "
-date = "${new Date().toISOString().split('T')[0]}"
-description = ""
+  meeting: `# Meeting Notes
 
-[taxonomies]
-tags = ["meeting"]
-
-[extra]
-attendees = []
-+++
+**Date:** ${new Date().toISOString().split('T')[0]}
 
 ## Agenda
 
@@ -232,6 +220,47 @@ const workspaceName = computed(() => {
 
 function handleFileSelect(path: string) {
   appStore.openFile(path);
+}
+
+async function handleMove(source: string, destination: string) {
+  try {
+    await invoke('move_file', { source, destination });
+    appStore.showMessage('File moved');
+    if (appStore.workspacePath) {
+      await appStore.openFolder(appStore.workspacePath);
+    }
+  } catch (e: any) {
+    appStore.showMessage(e.toString(), 'error');
+  }
+}
+
+function handleRequestDelete(node: FileTreeNode) {
+  deleteTarget.value = node;
+  showDeleteDialog.value = true;
+}
+
+async function confirmDelete() {
+  if (!deleteTarget.value) return;
+  try {
+    if (deleteTarget.value.is_dir) {
+      await invoke('delete_dir', { dirPath: deleteTarget.value.path });
+    } else {
+      await invoke('delete_file', { filePath: deleteTarget.value.path });
+    }
+    appStore.showMessage(`Deleted ${deleteTarget.value.name}`);
+    // If the deleted file was open, clear it
+    if (appStore.currentFile?.path === deleteTarget.value.path) {
+      appStore.currentFile = null;
+    }
+    if (appStore.workspacePath) {
+      await appStore.openFolder(appStore.workspacePath);
+    }
+  } catch (e: any) {
+    appStore.showMessage(e.toString(), 'error');
+  } finally {
+    showDeleteDialog.value = false;
+    deleteTarget.value = null;
+  }
 }
 
 async function createNewFile() {

@@ -83,32 +83,32 @@ if (-not (Test-Path "node_modules")) {
     Write-Info "node_modules/ exists, skipping npm install (run npm install manually if needed)"
 }
 
-# ── Ensure Zola sidecar ────────────────────────────────────────────────────
-$ZolaSidecar = "src-tauri\binaries\zola-${Triple}.exe"
-if (-not (Test-Path $ZolaSidecar)) {
-    Write-Info "Zola sidecar not found, downloading..."
+# ── Ensure mdBook sidecar ───────────────────────────────────────────────────
+$MdbookSidecar = "src-tauri\binaries\mdbook-${Triple}.exe"
+if (-not (Test-Path $MdbookSidecar)) {
+    Write-Info "mdBook sidecar not found, downloading..."
 
-    $ZolaVersion = if ($env:ZOLA_VERSION) { $env:ZOLA_VERSION } else { "0.19.2" }
+    $MdbookVersion = if ($env:MDBOOK_VERSION) { $env:MDBOOK_VERSION } else { "0.4.40" }
     $BinDir = "src-tauri\binaries"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-    $Url = "https://github.com/getzola/zola/releases/download/v${ZolaVersion}/zola-v${ZolaVersion}-${Triple}.zip"
-    $TmpZip = Join-Path $env:TEMP "zola-download.zip"
-    $TmpDir = Join-Path $env:TEMP "zola-extract"
+    $Url = "https://github.com/rust-lang/mdBook/releases/download/v${MdbookVersion}/mdbook-v${MdbookVersion}-${Triple}.zip"
+    $TmpZip = Join-Path $env:TEMP "mdbook-download.zip"
+    $TmpDir = Join-Path $env:TEMP "mdbook-extract"
 
-    Write-Info "Downloading Zola ${ZolaVersion} for ${Triple}..."
+    Write-Info "Downloading mdBook ${MdbookVersion} for ${Triple}..."
     Invoke-WebRequest -Uri $Url -OutFile $TmpZip -UseBasicParsing
 
     if (Test-Path $TmpDir) { Remove-Item -Recurse -Force $TmpDir }
     Expand-Archive -Path $TmpZip -DestinationPath $TmpDir -Force
-    Copy-Item (Join-Path $TmpDir "zola.exe") $ZolaSidecar -Force
+    Copy-Item (Join-Path $TmpDir "mdbook.exe") $MdbookSidecar -Force
 
     Remove-Item -Force $TmpZip -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 
-    Write-Ok "Zola sidecar ready"
+    Write-Ok "mdBook sidecar ready"
 } else {
-    Write-Info "Zola sidecar found: $ZolaSidecar"
+    Write-Info "mdBook sidecar found: $MdbookSidecar"
 }
 
 # ── Build ───────────────────────────────────────────────────────────────────

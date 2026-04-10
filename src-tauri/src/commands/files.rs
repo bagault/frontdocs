@@ -223,3 +223,47 @@ fn sanitize_filename(name: &str) -> String {
     // Prevent path traversal
     sanitized.replace("..", "_")
 }
+
+#[tauri::command]
+pub async fn move_file(source: String, destination: String) -> Result<(), String> {
+    let src = PathBuf::from(&source);
+    let dst = PathBuf::from(&destination);
+
+    if !src.exists() {
+        return Err(format!("Source does not exist: {}", source));
+    }
+    if dst.exists() {
+        return Err(format!("Destination already exists: {}", destination));
+    }
+
+    // Ensure destination parent exists
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    std::fs::rename(&src, &dst).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_file(file_path: String) -> Result<(), String> {
+    let path = PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err(format!("File does not exist: {}", file_path));
+    }
+    if !path.is_file() {
+        return Err("Path is not a file".to_string());
+    }
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_dir(dir_path: String) -> Result<(), String> {
+    let path = PathBuf::from(&dir_path);
+    if !path.exists() {
+        return Err(format!("Directory does not exist: {}", dir_path));
+    }
+    if !path.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+    std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
+}

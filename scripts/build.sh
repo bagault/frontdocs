@@ -113,14 +113,14 @@ else
   info "node_modules/ exists, skipping npm install (run npm install manually if needed)"
 fi
 
-# ── Ensure Zola sidecar ────────────────────────────────────────────────────
-ZOLA_SIDECAR="src-tauri/binaries/zola-${TRIPLE}"
-if [[ ! -f "$ZOLA_SIDECAR" ]]; then
-  info "Zola sidecar not found, downloading..."
-  bash scripts/download-zola.sh
-  ok "Zola sidecar ready"
+# ── Ensure mdBook sidecar ─────────────────────────────────────────────────────
+MDBOOK_SIDECAR="src-tauri/binaries/mdbook-${TRIPLE}"
+if [[ ! -f "$MDBOOK_SIDECAR" ]]; then
+  info "mdBook sidecar not found, downloading..."
+  bash scripts/download-mdbook.sh
+  ok "mdBook sidecar ready"
 else
-  info "Zola sidecar found: ${ZOLA_SIDECAR}"
+  info "mdBook sidecar found: ${MDBOOK_SIDECAR}"
 fi
 
 # ── Build ───────────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@
             :loading="isOpening"
             block
           >
-            Open Markdown Folder
+            Open Folder
           </v-btn>
 
           <!-- Divider -->
@@ -101,12 +101,49 @@
         </div>
       </v-col>
     </v-row>
+
+    <!-- Convert to project dialog -->
+    <v-dialog v-model="showConvertDialog" max-width="500" persistent>
+      <v-card>
+        <v-card-title class="text-h6">Convert to mdBook Project?</v-card-title>
+        <v-card-text>
+          <p class="mb-3">
+            This folder contains Markdown files but is not yet an mdBook project.
+          </p>
+          <p class="mb-3">
+            Converting will create a project structure with:
+          </p>
+          <ul class="ml-4 mb-3">
+            <li><strong>book.toml</strong> — mdBook configuration</li>
+            <li><strong>src/</strong> — your Markdown files (moved here)</li>
+            <li><strong>src/SUMMARY.md</strong> — auto-generated navigation</li>
+          </ul>
+          <v-text-field
+            v-model="projectTitle"
+            label="Project title"
+            placeholder="My Knowledge Base"
+            class="mt-4"
+          />
+          <v-alert type="info" variant="tonal" density="compact" class="mt-2">
+            You can also skip this and work with raw Markdown files directly.
+          </v-alert>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="skipConversion">Skip</v-btn>
+          <v-btn color="primary" @click="doConvert" :loading="isConverting">
+            Convert
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-container>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useAppStore } from '../stores/app';
 import { useAiStore } from '../stores/ai';
@@ -115,6 +152,10 @@ const router = useRouter();
 const appStore = useAppStore();
 const aiStore = useAiStore();
 const isOpening = ref(false);
+const showConvertDialog = ref(false);
+const isConverting = ref(false);
+const projectTitle = ref('');
+const pendingFolderPath = ref('');
 
 const features = [
   { icon: 'mdi-robot-outline', title: 'AI Powered', color: 'primary' },
@@ -131,16 +172,56 @@ async function handleOpenFolder() {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: 'Select Markdown Folder',
+      title: 'Select Folder',
     });
     if (selected && typeof selected === 'string') {
-      await appStore.openFolder(selected);
-      router.push('/workspace');
+      // Detect project type
+      const projectType = await invoke<string>('detect_project_type', { folderPath: selected });
+
+      if (projectType === 'project') {
+        // Already an mdBook project — open directly
+        await appStore.openFolder(selected);
+        router.push('/workspace');
+      } else if (projectType === 'markdown') {
+        // Raw markdown folder — offer conversion
+        pendingFolderPath.value = selected;
+        const parts = selected.replace(/\\/g, '/').split('/');
+        projectTitle.value = parts[parts.length - 1] || parts[parts.length - 2] || 'My Knowledge Base';
+        showConvertDialog.value = true;
+      } else {
+        // Empty folder — open as-is
+        await appStore.openFolder(selected);
+        router.push('/workspace');
+      }
     }
   } catch (e: any) {
     appStore.showMessage(e.toString(), 'error');
   } finally {
     isOpening.value = false;
+  }
+}
+
+async function skipConversion() {
+  showConvertDialog.value = false;
+  await appStore.openFolder(pendingFolderPath.value);
+  router.push('/workspace');
+}
+
+async function doConvert() {
+  isConverting.value = true;
+  try {
+    await invoke('convert_to_project', {
+      folderPath: pendingFolderPath.value,
+      title: projectTitle.value || 'My Knowledge Base',
+    });
+    appStore.showMessage('Converted to mdBook project');
+    showConvertDialog.value = false;
+    await appStore.openFolder(pendingFolderPath.value);
+    router.push('/workspace');
+  } catch (e: any) {
+    appStore.showMessage(e.toString(), 'error');
+  } finally {
+    isConverting.value = false;
   }
 }
 
@@ -151,8 +232,16 @@ async function handleNewProject() {
     title: 'Select Folder for New Project',
   });
   if (selected && typeof selected === 'string') {
-    await appStore.openFolder(selected);
-    router.push('/workspace');
+    // Create a new mdBook project structure
+    try {
+      const parts = selected.replace(/\\/g, '/').split('/');
+      const title = parts[parts.length - 1] || 'New Project';
+      await invoke('convert_to_project', { folderPath: selected, title });
+      await appStore.openFolder(selected);
+      router.push('/workspace');
+    } catch (e: any) {
+      appStore.showMessage(e.toString(), 'error');
+    }
   }
 }
 </script>

@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{ai, export, files, settings, zola};
+use commands::{ai, export, files, settings, mdbook};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,8 +15,13 @@ pub fn run() {
             files::save_markdown_file,
             files::create_markdown_file,
             files::get_file_tree,
-            zola::build_site,
-            zola::preview_site,
+            files::move_file,
+            files::delete_file,
+            files::delete_dir,
+            mdbook::build_site,
+            mdbook::preview_site,
+            mdbook::detect_project_type,
+            mdbook::convert_to_project,
             ai::ai_complete,
             ai::ai_generate_page,
             ai::ai_summarize,

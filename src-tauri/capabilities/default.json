@@ -13,7 +13,7 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "binaries/zola",
+          "name": "binaries/mdbook",
           "sidecar": true,
           "args": true
         }
