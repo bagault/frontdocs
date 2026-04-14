@@ -28,6 +28,8 @@ export const useAppStore = defineStore('app', () => {
   async function openFolder(path: string) {
     isLoading.value = true;
     try {
+      const projectType = await invoke<string>('detect_project_type', { folderPath: path });
+      isProject.value = projectType === 'project';
       workspacePath.value = path;
       const result = await invoke<MarkdownFile[]>('list_markdown_files', {
         folderPath: path,
@@ -86,6 +88,8 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  const isProject = ref(false);
+
   async function buildAndExport(format: string, outputPath?: string) {
     if (!workspacePath.value) return;
     isLoading.value = true;
@@ -93,6 +97,11 @@ export const useAppStore = defineStore('app', () => {
     buildLog.value = [];
     isBuildDialogOpen.value = true;
     try {
+      // For project workspaces, default output to dist/ inside the project
+      if (!outputPath && isProject.value) {
+        outputPath = workspacePath.value.replace(/[\\/]+$/, '') + '/dist';
+      }
+
       // Use a temp dir for the intermediate mkdocs build
       const buildOutputDir = workspacePath.value + '_build';
 
@@ -206,6 +215,7 @@ export const useAppStore = defineStore('app', () => {
     buildOutput,
     buildLog,
     isBuildDialogOpen,
+    isProject,
     sideNavOpen,
     aiPanelOpen,
     snackbar,

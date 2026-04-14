@@ -170,7 +170,7 @@ const saving = ref(false);
 const refreshing = ref(false);
 
 const outputPathDisplay = computed(
-  () => settings.output_path || 'Default (next to input folder)'
+  () => settings.output_path || 'Default (project: dist/, otherwise next to input folder)'
 );
 
 onMounted(async () => {

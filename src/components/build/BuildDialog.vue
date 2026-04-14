@@ -117,9 +117,13 @@ const progressColor = computed(() => {
   return 'success';
 });
 
-const outputDisplay = computed(
-  () => outputPath.value || 'Default (next to input folder)'
-);
+const outputDisplay = computed(() => {
+  if (outputPath.value) return outputPath.value;
+  if (appStore.isProject && appStore.workspacePath) {
+    return appStore.workspacePath.replace(/[\\/]+$/, '') + '/dist';
+  }
+  return 'Default (next to input folder)';
+});
 
 watch(() => appStore.buildLog.length, () => {
   nextTick(() => {
