@@ -5,8 +5,12 @@ node_modules/
 dist/
 src-tauri/target/
 
-# mdBook sidecar binaries (downloaded per-platform)
-src-tauri/binaries/mdbook-*
+# mkdocs sidecar binaries (built per-platform via PyInstaller)
+src-tauri/binaries/mkdocs-*
+
+# PyInstaller build artifacts
+.mkdocs-venv/
+.pyinstaller-work/
 
 # Environment
 .env

@@ -113,17 +113,18 @@ else
   info "node_modules/ exists, skipping npm install (run npm install manually if needed)"
 fi
 
-# ── Ensure mkdocs is installed ──────────────────────────────────────────────
-if ! command -v mkdocs &>/dev/null; then
-  warn "mkdocs not found. Installing mkdocs and mkdocs-material..."
-  pip install --user mkdocs mkdocs-material pymdown-extensions || pip3 install --user mkdocs mkdocs-material pymdown-extensions
-  if ! command -v mkdocs &>/dev/null; then
-    err "Failed to install mkdocs. Install it manually: pip install mkdocs mkdocs-material pymdown-extensions"
+# ── Bundle mkdocs sidecar ───────────────────────────────────────────────────
+MKDOCS_SIDECAR="src-tauri/binaries/mkdocs-${TRIPLE}"
+if [[ ! -f "$MKDOCS_SIDECAR" ]]; then
+  info "mkdocs sidecar not found — building with PyInstaller..."
+  bash "$SCRIPT_DIR/bundle-mkdocs.sh"
+  if [[ ! -f "$MKDOCS_SIDECAR" ]]; then
+    err "Failed to build mkdocs sidecar"
     exit 1
   fi
-  ok "mkdocs installed"
+  ok "mkdocs sidecar ready"
 else
-  info "mkdocs found: $(mkdocs --version)"
+  info "mkdocs sidecar found: $MKDOCS_SIDECAR"
 fi
 
 # ── Build ───────────────────────────────────────────────────────────────────

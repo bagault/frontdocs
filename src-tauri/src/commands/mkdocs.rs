@@ -607,7 +607,7 @@ async fn run_mkdocs(
 
     let child = cmd.spawn().map_err(|e| {
         format!(
-            "Failed to run mkdocs: {}. Make sure mkdocs is installed (pip install mkdocs mkdocs-material).",
+            "Failed to run mkdocs: {}. The bundled mkdocs binary may be missing — rebuild with scripts/bundle-mkdocs.sh",
             e
         )
     })?;
@@ -670,21 +670,18 @@ fn find_build_output(project_dir: &Path) -> String {
 }
 
 fn find_mkdocs() -> String {
-    // Try common mkdocs locations
-    let candidates: Vec<&str> = if cfg!(windows) {
-        vec!["mkdocs.exe", "mkdocs"]
-    } else {
-        vec!["mkdocs", "/usr/local/bin/mkdocs", "/usr/bin/mkdocs"]
-    };
-
-    for candidate in &candidates {
-        let path = Path::new(candidate);
-        if path.exists() {
-            return candidate.to_string();
+    // 1. Check for bundled sidecar next to the executable (Tauri places sidecars here)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let sidecar_name = if cfg!(windows) { "mkdocs.exe" } else { "mkdocs" };
+            let sidecar_path = exe_dir.join(sidecar_name);
+            if sidecar_path.exists() {
+                return sidecar_path.to_string_lossy().to_string();
+            }
         }
     }
 
-    // Check if mkdocs is on PATH using `which` or `where`
+    // 2. Check if mkdocs is on PATH using `which` or `where`
     let which_cmd = if cfg!(windows) { "where" } else { "which" };
     if let Ok(output) = std::process::Command::new(which_cmd)
         .arg("mkdocs")
@@ -693,12 +690,11 @@ fn find_mkdocs() -> String {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
-                // Take first line in case `where` returns multiple paths on Windows
                 return path.lines().next().unwrap_or(&path).to_string();
             }
         }
     }
 
-    // Fall back — let the OS find it
+    // 3. Fall back — let the OS find it
     "mkdocs".to_string()
 }

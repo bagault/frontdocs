@@ -32,7 +32,7 @@
       "../assets/logo.png",
       "../assets/logo.ico"
     ],
-    "externalBin": []
+    "externalBin": ["binaries/mkdocs"]
   },
   "plugins": {
     "shell": {

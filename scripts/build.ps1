@@ -83,18 +83,18 @@ if (-not (Test-Path "node_modules")) {
     Write-Info "node_modules/ exists, skipping npm install (run npm install manually if needed)"
 }
 
-# ── Ensure mkdocs is installed ────────────────────────────────────────────────
-if (-not (Get-Command "mkdocs" -ErrorAction SilentlyContinue)) {
-    Write-Info "mkdocs not found. Installing mkdocs and mkdocs-material..."
-    & pip install mkdocs mkdocs-material pymdown-extensions
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "Failed to install mkdocs. Install it manually: pip install mkdocs mkdocs-material pymdown-extensions"
+# ── Bundle mkdocs sidecar ─────────────────────────────────────────────────
+$MkdocsSidecar = "src-tauri\binaries\mkdocs-$Triple.exe"
+if (-not (Test-Path $MkdocsSidecar)) {
+    Write-Info "mkdocs sidecar not found - building with PyInstaller..."
+    & powershell -ExecutionPolicy Bypass -File "$ScriptDir\bundle-mkdocs.ps1"
+    if (-not (Test-Path $MkdocsSidecar)) {
+        Write-Err "Failed to build mkdocs sidecar"
         exit 1
     }
-    Write-Ok "mkdocs installed"
+    Write-Ok "mkdocs sidecar ready"
 } else {
-    $mkdocsVer = & mkdocs --version
-    Write-Info "mkdocs found: $mkdocsVer"
+    Write-Info "mkdocs sidecar found: $MkdocsSidecar"
 }
 
 # ── Build ───────────────────────────────────────────────────────────────────

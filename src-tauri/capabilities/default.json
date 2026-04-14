@@ -13,7 +13,7 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "binaries/mdbook",
+          "name": "binaries/mkdocs",
           "sidecar": true,
           "args": true
         }
