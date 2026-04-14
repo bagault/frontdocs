@@ -105,18 +105,18 @@
     <!-- Convert to project dialog -->
     <v-dialog v-model="showConvertDialog" max-width="500" persistent>
       <v-card>
-        <v-card-title class="text-h6">Convert to mdBook Project?</v-card-title>
+        <v-card-title class="text-h6">Convert to MkDocs Project?</v-card-title>
         <v-card-text>
           <p class="mb-3">
-            This folder contains Markdown files but is not yet an mdBook project.
+            This folder contains Markdown files but is not yet an MkDocs project.
           </p>
           <p class="mb-3">
             Converting will create a project structure with:
           </p>
           <ul class="ml-4 mb-3">
-            <li><strong>book.toml</strong> — mdBook configuration</li>
+            <li><strong>mkdocs.yml</strong> — MkDocs configuration</li>
             <li><strong>src/</strong> — your Markdown files (moved here)</li>
-            <li><strong>src/SUMMARY.md</strong> — auto-generated navigation</li>
+            <li><strong>extensions/</strong> — third-party MkDocs extensions</li>
           </ul>
           <v-text-field
             v-model="projectTitle"
@@ -179,7 +179,7 @@ async function handleOpenFolder() {
       const projectType = await invoke<string>('detect_project_type', { folderPath: selected });
 
       if (projectType === 'project') {
-        // Already an mdBook project — open directly
+        // Already an MkDocs project — open directly
         await appStore.openFolder(selected);
         router.push('/workspace');
       } else if (projectType === 'markdown') {
@@ -214,7 +214,7 @@ async function doConvert() {
       folderPath: pendingFolderPath.value,
       title: projectTitle.value || 'My Knowledge Base',
     });
-    appStore.showMessage('Converted to mdBook project');
+    appStore.showMessage('Converted to MkDocs project');
     showConvertDialog.value = false;
     await appStore.openFolder(pendingFolderPath.value);
     router.push('/workspace');
@@ -232,7 +232,7 @@ async function handleNewProject() {
     title: 'Select Folder for New Project',
   });
   if (selected && typeof selected === 'string') {
-    // Create a new mdBook project structure
+    // Create a new MkDocs project structure
     try {
       const parts = selected.replace(/\\/g, '/').split('/');
       const title = parts[parts.length - 1] || 'New Project';

@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{ai, export, files, settings, mdbook};
+use commands::{ai, export, files, mkdocs, settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,10 +18,10 @@ pub fn run() {
             files::move_file,
             files::delete_file,
             files::delete_dir,
-            mdbook::build_site,
-            mdbook::preview_site,
-            mdbook::detect_project_type,
-            mdbook::convert_to_project,
+            mkdocs::build_site,
+            mkdocs::preview_site,
+            mkdocs::detect_project_type,
+            mkdocs::convert_to_project,
             ai::ai_complete,
             ai::ai_generate_page,
             ai::ai_summarize,

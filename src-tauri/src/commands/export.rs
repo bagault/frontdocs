@@ -73,7 +73,7 @@ fn export_as_archive(source: &PathBuf, output_path: Option<String>) -> Result<St
             .strip_prefix(source)
             .unwrap_or(entry.path())
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");  // ZIP entries must use forward slashes
 
         zip.start_file(&relative, options)
             .map_err(|e| e.to_string())?;

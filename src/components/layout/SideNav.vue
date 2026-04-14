@@ -214,7 +214,7 @@ const templateContent: Record<string, string> = {
 
 const workspaceName = computed(() => {
   if (!appStore.workspacePath) return '';
-  const parts = appStore.workspacePath.split('/');
+  const parts = appStore.workspacePath.replace(/\\/g, '/').split('/');
   return parts[parts.length - 1] || parts[parts.length - 2] || 'Workspace';
 });
 

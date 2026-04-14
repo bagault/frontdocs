@@ -57,7 +57,7 @@ pub async fn list_markdown_files(folder_path: String) -> Result<Vec<MarkdownFile
             .strip_prefix(&base)
             .unwrap_or(entry.path())
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
 
         files.push(MarkdownFile {
             path,

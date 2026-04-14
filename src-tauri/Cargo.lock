@@ -946,9 +946,8 @@ dependencies = [
 
 [[package]]
 name = "frontdocs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
- "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -958,7 +957,6 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-shell",
  "tokio",
- "toml 0.8.2",
  "walkdir",
  "zip",
 ]

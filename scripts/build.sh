@@ -113,14 +113,17 @@ else
   info "node_modules/ exists, skipping npm install (run npm install manually if needed)"
 fi
 
-# ── Ensure mdBook sidecar ─────────────────────────────────────────────────────
-MDBOOK_SIDECAR="src-tauri/binaries/mdbook-${TRIPLE}"
-if [[ ! -f "$MDBOOK_SIDECAR" ]]; then
-  info "mdBook sidecar not found, downloading..."
-  bash scripts/download-mdbook.sh
-  ok "mdBook sidecar ready"
+# ── Ensure mkdocs is installed ──────────────────────────────────────────────
+if ! command -v mkdocs &>/dev/null; then
+  warn "mkdocs not found. Installing mkdocs and mkdocs-material..."
+  pip install --user mkdocs mkdocs-material pymdown-extensions || pip3 install --user mkdocs mkdocs-material pymdown-extensions
+  if ! command -v mkdocs &>/dev/null; then
+    err "Failed to install mkdocs. Install it manually: pip install mkdocs mkdocs-material pymdown-extensions"
+    exit 1
+  fi
+  ok "mkdocs installed"
 else
-  info "mdBook sidecar found: ${MDBOOK_SIDECAR}"
+  info "mkdocs found: $(mkdocs --version)"
 fi
 
 # ── Build ───────────────────────────────────────────────────────────────────

@@ -184,13 +184,13 @@ pub async fn ai_complete(config: AiConfig, prompt: String, context: Option<Strin
 #[tauri::command]
 pub async fn ai_generate_page(config: AiConfig, topic: String, context: Option<String>) -> Result<AiResponse, String> {
     let system = "You are an expert academic documentation writer. Generate a well-structured Markdown page \
-                  suitable for an mdBook-based knowledge base. Include:\n\
+                  suitable for an MkDocs-based knowledge base. Include:\n\
                   - A top-level # heading as the page title\n\
                   - Clear headings and sections using ## and ### levels\n\
                   - Academic and professional tone\n\
-                  - Proper Markdown links for cross-references (e.g., [related topic](./related.md))\n\
+                  - Proper Markdown links for cross-references (e.g., [related topic](related.md))\n\
                   - LaTeX math notation where appropriate (using $...$ for inline, $$...$$ for display)\n\
-                  - Do NOT include TOML/YAML frontmatter — mdBook does not use it\n\
+                  - Do NOT include TOML/YAML frontmatter\n\
                   Output ONLY the complete Markdown document, nothing else.";
 
     let user_prompt = if let Some(ctx) = context {
@@ -245,8 +245,8 @@ pub async fn ai_suggest_structure(
 
 #[tauri::command]
 pub async fn ai_generate_metadata(config: AiConfig, content: String) -> Result<AiResponse, String> {
-    let system = "You are a metadata specialist for academic documentation using mdBook. \
-                  Since mdBook does not use frontmatter, generate a structured Markdown header section \
+    let system = "You are a metadata specialist for academic documentation using MkDocs. \
+                  Generate a structured Markdown header section \
                   for the given content. Include:\n\
                   - A top-level # heading with a descriptive, concise title\n\
                   - A brief description paragraph\n\

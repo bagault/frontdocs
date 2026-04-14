@@ -119,13 +119,15 @@ function onDrop(event: DragEvent) {
   const sourcePath = event.dataTransfer.getData('text/plain');
   if (!sourcePath || sourcePath === props.node.path) return;
 
-  // Don't drop a folder into itself
-  if (props.node.path.startsWith(sourcePath + '/')) return;
+  // Don't drop a folder into itself (normalize for cross-platform)
+  const normalizedNode = props.node.path.replace(/\\/g, '/');
+  const normalizedSource = sourcePath.replace(/\\/g, '/');
+  if (normalizedNode.startsWith(normalizedSource + '/')) return;
 
   // Extract filename from source path
-  const parts = sourcePath.replace(/\\/g, '/').split('/');
+  const parts = normalizedSource.split('/');
   const fileName = parts[parts.length - 1];
-  const destPath = props.node.path.replace(/\\/g, '/') + '/' + fileName;
+  const destPath = normalizedNode + '/' + fileName;
 
   if (sourcePath !== destPath) {
     emit('move', sourcePath, destPath);

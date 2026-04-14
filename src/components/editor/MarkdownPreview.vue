@@ -74,15 +74,16 @@ function handleClick(e: MouseEvent) {
 
 function resolveInternalLink(href: string): string | null {
   if (!appStore.workspacePath) return null;
-  // Strip leading ./ or /
-  const clean = href.replace(/^\.?\//, '');
-  // Try to find matching file in workspace
-  const match = appStore.files.find(f =>
-    f.relative_path === clean ||
-    f.relative_path === clean + '.md' ||
-    f.name === clean ||
-    f.name === clean + '.md'
-  );
+  // Strip leading ./ or / and normalize path separators
+  const clean = href.replace(/^\.?\//, '').replace(/\\/g, '/');
+  // Try to find matching file in workspace (normalize both sides for cross-platform)
+  const match = appStore.files.find(f => {
+    const rel = f.relative_path.replace(/\\/g, '/');
+    return rel === clean ||
+      rel === clean + '.md' ||
+      f.name === clean ||
+      f.name === clean + '.md';
+  });
   return match?.path || null;
 }
 

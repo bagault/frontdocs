@@ -93,13 +93,13 @@ export const useAppStore = defineStore('app', () => {
     buildLog.value = [];
     isBuildDialogOpen.value = true;
     try {
-      // Use a temp dir for the intermediate mdBook build
+      // Use a temp dir for the intermediate mkdocs build
       const buildOutputDir = workspacePath.value + '_build';
 
-      buildLog.value.push('Starting mdBook build...');
+      buildLog.value.push('Starting mkdocs build...');
       buildProgress.value = 5;
 
-      // Slow logarithmic progress simulation during mdBook build
+      // Slow logarithmic progress simulation during mkdocs build
       let tick = 0;
       const progressInterval = setInterval(() => {
         tick++;
@@ -110,7 +110,7 @@ export const useAppStore = defineStore('app', () => {
         }
         // Add periodic log entries
         if (tick === 3) buildLog.value.push('Processing content files...');
-        if (tick === 8) buildLog.value.push('Generating SUMMARY.md...');
+        if (tick === 8) buildLog.value.push('Generating navigation...');
         if (tick === 14) buildLog.value.push('Building search index...');
         if (tick === 20) buildLog.value.push('Rendering pages...');
       }, 500);
