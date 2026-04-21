@@ -48,7 +48,10 @@ pub async fn convert_to_project(folder_path: String, title: String) -> Result<()
     )
     .map_err(|e| e.to_string())?;
 
-    // Create PROJECT README.md for GitHub Pages
+    // Move all .md files and subdirectories containing .md files into src/
+    move_markdown_content(&root, &src_dir)?;
+
+    // Create PROJECT README.md for GitHub Pages after moving source markdown so it stays at repo root.
     let readme_content = format!(
         r#"# {title}
 
@@ -84,9 +87,6 @@ The `dist/` folder is ready to deploy to GitHub Pages. Configure your repository
 "#
     );
     std::fs::write(root.join("README.md"), readme_content).map_err(|e| e.to_string())?;
-
-    // Move all .md files and subdirectories containing .md files into src/
-    move_markdown_content(&root, &src_dir)?;
 
     // Ensure index.md exists (mkdocs requires it)
     ensure_index_md(&src_dir)?;

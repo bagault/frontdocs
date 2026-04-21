@@ -106,31 +106,6 @@
     </v-dialog>
 
     <!-- Delete confirmation dialog -->
-
-
-    async function handleRequestCreateFolder(folderPath: string) {
-      newFolderPath.value = folderPath;
-      newFolderName.value = '';
-      showNewFolder.value = true;
-    }
-
-    async function createNewFolder() {
-      if (!newFolderName.value.trim()) return;
-      const folderName = newFolderName.value.trim();
-      try {
-        await invoke('create_folder', { folderPath: newFolderPath.value, folderName });
-        appStore.showMessage(`Folder "${folderName}" created`);
-        if (appStore.workspacePath) {
-          await appStore.openFolder(appStore.workspacePath);
-        }
-      } catch (e: any) {
-        appStore.showMessage(e.toString(), 'error');
-      } finally {
-        showNewFolder.value = false;
-        newFolderName.value = '';
-        newFolderPath.value = '';
-      }
-    }
     <v-dialog v-model="showDeleteDialog" max-width="440">
       <v-card>
         <v-card-title class="text-h6">
@@ -324,5 +299,32 @@ async function createNewFile() {
   showNewFile.value = false;
   newFileName.value = '';
   newFileTemplate.value = 'blank';
+}
+
+function handleRequestCreateFolder(folderPath: string) {
+  newFolderPath.value = folderPath;
+  newFolderName.value = '';
+  showNewFolder.value = true;
+}
+
+async function createNewFolder() {
+  if (!newFolderName.value.trim()) return;
+
+  const folderName = newFolderName.value.trim();
+
+  try {
+    await invoke('create_folder', { folderPath: newFolderPath.value, folderName });
+    appStore.showMessage(`Folder "${folderName}" created`);
+
+    if (appStore.workspacePath) {
+      await appStore.openFolder(appStore.workspacePath);
+    }
+  } catch (e: any) {
+    appStore.showMessage(e.toString(), 'error');
+  } finally {
+    showNewFolder.value = false;
+    newFolderName.value = '';
+    newFolderPath.value = '';
+  }
 }
 </script>

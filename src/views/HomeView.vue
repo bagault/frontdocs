@@ -116,6 +116,7 @@
           <ul class="ml-4 mb-3" v-if="settingsStore.current.processor === 'mdbook'">
             <li><strong>book.toml</strong> — mdBook configuration</li>
             <li><strong>src/</strong> — your Markdown files (moved here)</li>
+            <li><strong>dist/</strong> — built site output for GitHub Pages</li>
             <li><strong>SUMMARY.md</strong> — book structure</li>
           </ul>
           <ul class="ml-4 mb-3" v-else>
