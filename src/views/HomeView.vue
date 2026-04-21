@@ -105,15 +105,20 @@
     <!-- Convert to project dialog -->
     <v-dialog v-model="showConvertDialog" max-width="500" persistent>
       <v-card>
-        <v-card-title class="text-h6">Convert to MkDocs Project?</v-card-title>
+        <v-card-title class="text-h6">Convert to {{ settingsStore.current.processor === 'mdbook' ? 'mdBook' : 'MkDocs' }} Project?</v-card-title>
         <v-card-text>
           <p class="mb-3">
-            This folder contains Markdown files but is not yet an MkDocs project.
+            This folder contains Markdown files but is not yet a {{ settingsStore.current.processor === 'mdbook' ? 'mdBook' : 'MkDocs' }} project.
           </p>
           <p class="mb-3">
             Converting will create a project structure with:
           </p>
-          <ul class="ml-4 mb-3">
+          <ul class="ml-4 mb-3" v-if="settingsStore.current.processor === 'mdbook'">
+            <li><strong>book.toml</strong> — mdBook configuration</li>
+            <li><strong>src/</strong> — your Markdown files (moved here)</li>
+            <li><strong>SUMMARY.md</strong> — book structure</li>
+          </ul>
+          <ul class="ml-4 mb-3" v-else>
             <li><strong>mkdocs.yml</strong> — MkDocs configuration</li>
             <li><strong>src/</strong> — your Markdown files (moved here)</li>
             <li><strong>extensions/</strong> — third-party MkDocs extensions</li>
@@ -147,10 +152,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useAppStore } from '../stores/app';
 import { useAiStore } from '../stores/ai';
+import { useSettingsStore } from '../stores/settings';
 
 const router = useRouter();
 const appStore = useAppStore();
 const aiStore = useAiStore();
+const settingsStore = useSettingsStore();
 const isOpening = ref(false);
 const showConvertDialog = ref(false);
 const isConverting = ref(false);
@@ -210,11 +217,13 @@ async function skipConversion() {
 async function doConvert() {
   isConverting.value = true;
   try {
-    await invoke('convert_to_project', {
+    const processor = settingsStore.current.processor || 'mkdocs';
+    const commandName = processor === 'mdbook' ? 'convert_to_project_mdbook' : 'convert_to_project';
+    await invoke(commandName, {
       folderPath: pendingFolderPath.value,
       title: projectTitle.value || 'My Knowledge Base',
     });
-    appStore.showMessage('Converted to MkDocs project');
+    appStore.showMessage(`Converted to ${processor === 'mdbook' ? 'mdBook' : 'MkDocs'} project`);
     showConvertDialog.value = false;
     await appStore.openFolder(pendingFolderPath.value);
     router.push('/workspace');
@@ -232,11 +241,13 @@ async function handleNewProject() {
     title: 'Select Folder for New Project',
   });
   if (selected && typeof selected === 'string') {
-    // Create a new MkDocs project structure
+    // Create a new project structure with the selected processor
     try {
       const parts = selected.replace(/\\/g, '/').split('/');
       const title = parts[parts.length - 1] || 'New Project';
-      await invoke('convert_to_project', { folderPath: selected, title });
+      const processor = settingsStore.current.processor || 'mkdocs';
+      const commandName = processor === 'mdbook' ? 'convert_to_project_mdbook' : 'convert_to_project';
+      await invoke(commandName, { folderPath: selected, title });
       await appStore.openFolder(selected);
       router.push('/workspace');
     } catch (e: any) {

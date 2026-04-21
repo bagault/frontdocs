@@ -267,3 +267,74 @@ pub async fn delete_dir(dir_path: String) -> Result<(), String> {
     }
     std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn create_folder(folder_path: String, folder_name: String) -> Result<String, String> {
+    let sanitized_name = sanitize_filename(&folder_name);
+    let new_folder = PathBuf::from(&folder_path).join(&sanitized_name);
+
+    if new_folder.exists() {
+        return Err(format!("Folder already exists: {}", sanitized_name));
+    }
+
+    std::fs::create_dir_all(&new_folder).map_err(|e| e.to_string())?;
+    Ok(new_folder.to_string_lossy().to_string())
+}
+
+/// Convert [[wiki-style links]] to markdown links
+/// [[note]] -> [note](note.md) or [note](note/index.md)
+pub fn convert_wiki_links(content: &str, available_files: &[String]) -> String {
+    let mut result = String::new();
+    let mut chars = content.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '[' && chars.peek() == Some(&'[') {
+            chars.next(); // consume second [
+            let mut link_content = String::new();
+            let mut found_closing = false;
+
+            while let Some(link_ch) = chars.next() {
+                if link_ch == ']' && chars.peek() == Some(&']') {
+                    chars.next(); // consume second ]
+                    found_closing = true;
+                    break;
+                }
+                link_content.push(link_ch);
+            }
+
+            if found_closing && !link_content.is_empty() {
+                // Try to resolve link
+                let link_path = resolve_link(&link_content, available_files);
+                result.push_str(&format!("[{}]({})", link_content, link_path));
+            } else {
+                // Not a valid link, restore original
+                result.push('[');
+                result.push('[');
+                result.push_str(&link_content);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+fn resolve_link(link: &str, available_files: &[String]) -> String {
+    let link_lower = link.to_lowercase().replace(' ', "_").replace('-', "_");
+
+    // Try to find exact match (with .md or as folder)
+    for file in available_files {
+        let file_lower = file.to_lowercase();
+        let file_name = file_lower.split('/').next().unwrap_or("");
+        
+        if file_name.replace(".md", "").replace("_index", "") == link_lower 
+            || file == &(link.to_string() + ".md")
+            || file == &(link.to_string() + "/index.md") {
+            return file.clone();
+        }
+    }
+
+    // Fallback: assume it's a file with .md extension
+    format!("{}.md", link)
+}

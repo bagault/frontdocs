@@ -103,6 +103,28 @@
       </v-card-text>
     </v-card>
 
+    <!-- Processor Settings -->
+    <v-card class="mb-4">
+      <v-card-title class="text-subtitle-1 font-weight-bold d-flex align-center">
+        <v-icon class="mr-2" color="primary">mdi-cog-outline</v-icon>
+        Build Processor
+      </v-card-title>
+      <v-card-text>
+        <v-radio-group v-model="settings.processor">
+          <v-radio label="MkDocs (Material theme)" value="mkdocs" color="primary" />
+          <v-radio label="mdBook (Rust-based)" value="mdbook" color="primary" />
+        </v-radio-group>
+        <v-alert
+          type="info"
+          variant="tonal"
+          density="compact"
+          class="mt-3"
+        >
+          <strong>{{ settings.processor === 'mkdocs' ? 'MkDocs' : 'mdBook' }}</strong> will be used for all builds in this project.
+        </v-alert>
+      </v-card-text>
+    </v-card>
+
     <!-- Output Settings -->
     <v-card class="mb-4">
       <v-card-title class="text-subtitle-1 font-weight-bold d-flex align-center">

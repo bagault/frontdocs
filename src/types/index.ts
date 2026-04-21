@@ -37,6 +37,7 @@ export interface AppSettings {
   external_model: string;
   theme: string;
   base_url: string;
+  processor: 'mkdocs' | 'mdbook';
 }
 
 export interface AiConfig {

@@ -42,6 +42,7 @@
           @select="handleFileSelect"
           @move="handleMove"
           @request-delete="handleRequestDelete"
+          @request-create-folder="handleRequestCreateFolder"
         />
         <div v-else class="text-center pa-4 text-medium-emphasis">
           <v-icon size="48" class="mb-2">mdi-file-tree-outline</v-icon>
@@ -81,7 +82,55 @@
       </v-card>
     </v-dialog>
 
+    <!-- New folder dialog -->
+    <v-dialog v-model="showNewFolder" max-width="440">
+      <v-card>
+        <v-card-title class="text-h6">New Folder</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="newFolderName"
+            label="Folder name"
+            placeholder="my-new-folder"
+            autofocus
+            @keydown.enter="createNewFolder"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="showNewFolder = false">Cancel</v-btn>
+          <v-btn color="primary" @click="createNewFolder" :disabled="!newFolderName.trim()">
+            Create
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Delete confirmation dialog -->
+
+
+    async function handleRequestCreateFolder(folderPath: string) {
+      newFolderPath.value = folderPath;
+      newFolderName.value = '';
+      showNewFolder.value = true;
+    }
+
+    async function createNewFolder() {
+      if (!newFolderName.value.trim()) return;
+      const folderName = newFolderName.value.trim();
+      try {
+        await invoke('create_folder', { folderPath: newFolderPath.value, folderName });
+        appStore.showMessage(`Folder "${folderName}" created`);
+        if (appStore.workspacePath) {
+          await appStore.openFolder(appStore.workspacePath);
+        }
+      } catch (e: any) {
+        appStore.showMessage(e.toString(), 'error');
+      } finally {
+        showNewFolder.value = false;
+        newFolderName.value = '';
+        newFolderPath.value = '';
+      }
+    }
     <v-dialog v-model="showDeleteDialog" max-width="440">
       <v-card>
         <v-card-title class="text-h6">
@@ -118,6 +167,9 @@ const newFileName = ref('');
 const newFileTemplate = ref('blank');
 const showDeleteDialog = ref(false);
 const deleteTarget = ref<FileTreeNode | null>(null);
+const showNewFolder = ref(false);
+const newFolderName = ref('');
+const newFolderPath = ref('');
 
 const templates = [
   { label: 'Blank page', value: 'blank' },

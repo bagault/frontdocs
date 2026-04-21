@@ -10,6 +10,7 @@
       @dragover.prevent="onDragOver"
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
+      @contextmenu.prevent="openContextMenu"
     >
       <v-icon size="18" class="mr-1">
         {{ expanded ? 'mdi-chevron-down' : 'mdi-chevron-right' }}
@@ -18,15 +19,29 @@
         {{ expanded ? 'mdi-folder-open' : 'mdi-folder' }}
       </v-icon>
       <span class="text-body-2 text-truncate flex-grow-1">{{ node.name }}</span>
-      <v-btn
-        icon
-        size="x-small"
-        variant="text"
-        class="tree-action"
-        @click.stop="$emit('requestDelete', node)"
-      >
-        <v-icon size="16" color="error">mdi-delete-outline</v-icon>
-      </v-btn>
+      <v-menu offset-y>
+        <template #activator="{ props }">
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            class="tree-action"
+            v-bind="props"
+            @click.stop
+          >
+            <v-icon size="16">mdi-dots-vertical</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact">
+          <v-list-item @click="requestCreateFolder" prepend-icon="mdi-folder-plus">
+            <v-list-item-title>New Folder</v-list-item-title>
+          </v-list-item>
+          <v-divider />
+          <v-list-item @click="$emit('requestDelete', node)" prepend-icon="mdi-delete">
+            <v-list-item-title class="text-error">Delete</v-list-item-title>
+          </v-list-item>
+        </v-list>
+      </v-menu>
     </div>
 
     <div
@@ -69,8 +84,28 @@
       @select="(path: string) => $emit('select', path)"
       @move="(source: string, dest: string) => $emit('move', source, dest)"
       @request-delete="(n: any) => $emit('requestDelete', n)"
+      @request-create-folder="(path: string) => $emit('requestCreateFolder', path)"
     />
   </div>
+
+  <v-dialog v-model="showCreateDialog" max-width="400">
+    <v-card>
+      <v-card-title>New Folder</v-card-title>
+      <v-card-text>
+        <v-text-field
+          v-model="newFolderName"
+          label="Folder name"
+          @keyup.enter="confirmCreateFolder"
+          autofocus
+        />
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="showCreateDialog = false">Cancel</v-btn>
+        <v-btn color="primary" @click="confirmCreateFolder">Create</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <script setup lang="ts">
@@ -87,10 +122,14 @@ const emit = defineEmits<{
   select: [path: string];
   move: [source: string, destination: string];
   requestDelete: [node: FileTreeNode];
+  requestCreateFolder: [path: string];
 }>();
 
 const expanded = ref(true);
 const isDragOver = ref(false);
+const showCreateDialog = ref(false);
+const newFolderName = ref('');
+const targetFolderPath = ref('');
 
 function onDragStart(event: DragEvent) {
   if (event.dataTransfer) {
@@ -132,6 +171,23 @@ function onDrop(event: DragEvent) {
   if (sourcePath !== destPath) {
     emit('move', sourcePath, destPath);
   }
+}
+
+function openContextMenu(event: MouseEvent) {
+  // This would be handled by the v-menu,  but we can use it for additional logic if needed
+}
+
+function requestCreateFolder() {
+  targetFolderPath.value = props.node.path;
+  newFolderName.value = '';
+  showCreateDialog.value = true;
+}
+
+function confirmCreateFolder() {
+  if (newFolderName.value.trim()) {
+    emit('requestCreateFolder', targetFolderPath.value);
+  }
+  showCreateDialog.value = false;
 }
 </script>
 

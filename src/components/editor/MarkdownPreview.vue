@@ -128,9 +128,36 @@ function stripFrontmatter(content: string): string {
   return content;
 }
 
+function convertWikiLinks(content: string): string {
+  // Convert [[link]] to [link](link.md) or [link name|link]] to [link name](link.md)
+  return content.replace(/\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]/g, (match, link, displayText) => {
+    const display = displayText || link;
+    const resolved = findLinkPath(link);
+    return `[${display}](${resolved})`;
+  });
+}
+
+function findLinkPath(link: string): string {
+  if (!appStore.workspacePath) {
+    // Fallback if no workspace
+    return link.toLowerCase().replace(/\s+/g, '_') + '.md';
+  }
+
+  const linkLower = link.toLowerCase().replace(/\s+/g, '_');
+  // Try to find matching file in workspace
+  const match = appStore.files.find(f => {
+    const name = f.name.replace('.md', '').replace('.markdown', '').toLowerCase().replace(/\s+/g, '_');
+    const relPath = f.relative_path.replace('.md', '').replace('.markdown', '').toLowerCase().replace(/\s+/g, '_');
+    return name === linkLower || relPath === linkLower;
+  });
+
+  return match ? match.relative_path : (linkLower + '.md');
+}
+
 const rendered = computed(() => {
   const body = stripFrontmatter(props.content);
-  const withLatex = renderLatex(body);
+  const withWikiLinks = convertWikiLinks(body);
+  const withLatex = renderLatex(withWikiLinks);
   return marked.parse(withLatex, { async: false }) as string;
 });
 </script>

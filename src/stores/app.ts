@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { MarkdownFile, FileContent, FileTreeNode, BuildResult } from '../types';
+import { useSettingsStore } from './settings';
 
 export const useAppStore = defineStore('app', () => {
   const workspacePath = ref<string | null>(null);
@@ -92,6 +93,8 @@ export const useAppStore = defineStore('app', () => {
 
   async function buildAndExport(format: string, outputPath?: string) {
     if (!workspacePath.value) return;
+    
+    const settingsStore = useSettingsStore();
     isLoading.value = true;
     buildProgress.value = 0;
     buildLog.value = [];
@@ -105,7 +108,10 @@ export const useAppStore = defineStore('app', () => {
       // Use a temp dir for the intermediate mkdocs build
       const buildOutputDir = workspacePath.value + '_build';
 
-      buildLog.value.push('Starting mkdocs build...');
+      const processor = settingsStore.current.processor || 'mkdocs';
+      const buildCommand = processor === 'mdbook' ? 'build_site_mdbook' : 'build_site';
+      const processorName = processor === 'mdbook' ? 'mdBook' : 'MkDocs';
+      buildLog.value.push(`Starting ${processorName} build...`);
       buildProgress.value = 5;
 
       // Slow logarithmic progress simulation during mkdocs build
@@ -124,7 +130,7 @@ export const useAppStore = defineStore('app', () => {
         if (tick === 20) buildLog.value.push('Rendering pages...');
       }, 500);
 
-      buildOutput.value = await invoke<BuildResult>('build_site', {
+      buildOutput.value = await invoke<BuildResult>(buildCommand, {
         sourceFolder: workspacePath.value,
         outputFolder: buildOutputDir,
       });

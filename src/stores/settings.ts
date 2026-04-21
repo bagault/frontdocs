@@ -14,6 +14,7 @@ const defaultSettings: AppSettings = {
   external_model: '',
   theme: 'dark',
   base_url: 'https://frontdocs.local',
+  processor: 'mkdocs',
 };
 
 export const useSettingsStore = defineStore('settings', () => {
