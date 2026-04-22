@@ -26,9 +26,17 @@
           color="primary"
           prepend-icon="mdi-file-plus-outline"
           @click="showNewFile = true"
-          block
         >
           New Page
+        </v-btn>
+        <v-btn
+          size="small"
+          variant="tonal"
+          color="secondary"
+          prepend-icon="mdi-folder-plus-outline"
+          @click="openRootFolderDialog"
+        >
+          New Folder
         </v-btn>
       </div>
 
@@ -305,6 +313,11 @@ function handleRequestCreateFolder(folderPath: string) {
   newFolderPath.value = folderPath;
   newFolderName.value = '';
   showNewFolder.value = true;
+}
+
+function openRootFolderDialog() {
+  if (!appStore.workspacePath) return;
+  handleRequestCreateFolder(appStore.workspacePath);
 }
 
 async function createNewFolder() {

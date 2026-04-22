@@ -183,11 +183,13 @@ async function handleOpenFolder() {
       title: 'Select Folder',
     });
     if (selected && typeof selected === 'string') {
-      // Detect project type
-      const projectType = await invoke<string>('detect_project_type', { folderPath: selected });
+      const detectedProcessor = await appStore.detectProject(selected);
+      const projectType = detectedProcessor
+        ? 'project'
+        : await invoke<string>('detect_project_type', { folderPath: selected });
 
       if (projectType === 'project') {
-        // Already an MkDocs project — open directly
+        // Existing project — open directly
         await appStore.openFolder(selected);
         router.push('/workspace');
       } else if (projectType === 'markdown') {

@@ -144,17 +144,20 @@ pub async fn build_site(
     output_folder: String,
 ) -> Result<BuildResult, String> {
     let source = PathBuf::from(&source_folder);
+    let output = PathBuf::from(&output_folder);
 
     if !source.exists() {
         return Err("Source folder does not exist".to_string());
     }
 
+    clean_output_dir(&output)?;
+
     let is_project = source.join("mkdocs.yml").exists();
 
     if is_project {
-        build_mkdocs_project(&source, &PathBuf::from(&output_folder)).await
+        build_mkdocs_project(&source, &output).await
     } else {
-        build_from_raw_markdown(&source, &PathBuf::from(&output_folder)).await
+        build_from_raw_markdown(&source, &output).await
     }
 }
 
@@ -179,6 +182,11 @@ async fn build_mkdocs_project(
         std::fs::remove_dir_all(&build_dir).map_err(|e| e.to_string())?;
     }
     copy_dir_recursive(project_dir, &build_dir)?;
+
+    let docs_dir = build_dir.join("src");
+    if docs_dir.exists() {
+        preprocess_wiki_links_in_dir(&docs_dir)?;
+    }
 
     // Patch mkdocs.yml to set site_dir to the desired output
     patch_mkdocs_yml(&build_dir, output_dir)?;
@@ -512,6 +520,13 @@ fn normalize_path(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+fn clean_output_dir(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Move .md files and directories containing .md files from root into src_dir.
 /// Preserves directory structure. Skips mkdocs.yml, src/, dist/, extensions/.
 fn move_markdown_content(root: &Path, src_dir: &Path) -> Result<(), String> {
@@ -560,6 +575,8 @@ fn move_markdown_content(root: &Path, src_dir: &Path) -> Result<(), String> {
 
 /// Copy markdown content preserving structure (for raw→temp build)
 fn copy_markdown_content(source: &Path, dest: &Path) -> Result<(), String> {
+    let available_files = collect_markdown_files(source)?;
+
     for entry in walkdir::WalkDir::new(source)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -576,6 +593,8 @@ fn copy_markdown_content(source: &Path, dest: &Path) -> Result<(), String> {
             let content = std::fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
             // Strip TOML/YAML frontmatter — mkdocs doesn't need it for build either
             let body = strip_frontmatter(&content).trim_start().to_string();
+            let current_file = relative.to_string_lossy().replace('\\', "/");
+            let body = convert_wiki_links(&body, &current_file, &available_files);
             let dest_file = dest.join(relative);
             if let Some(parent) = dest_file.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -616,6 +635,295 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
             std::fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
         }
     }
+    Ok(())
+}
+
+fn preprocess_wiki_links_in_dir(dir: &Path) -> Result<(), String> {
+    let available_files = collect_markdown_files(dir)?;
+
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if entry.path().extension().map_or(false, |ext| ext == "md" || ext == "markdown") {
+            let content = std::fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
+            let current_file = entry
+                .path()
+                .strip_prefix(dir)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            let converted = convert_wiki_links(&content, &current_file, &available_files);
+            std::fs::write(entry.path(), converted).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_markdown_files(root: &Path) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if entry.path().extension().map_or(false, |ext| ext == "md" || ext == "markdown") {
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push(relative);
+        }
+    }
+
+    Ok(files)
+}
+
+fn convert_wiki_links(content: &str, current_file: &str, available_files: &[String]) -> String {
+    let mut result = String::new();
+    let mut chars = content.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '[' && chars.peek() == Some(&'[') {
+            chars.next();
+            let mut link_content = String::new();
+            let mut found_closing = false;
+
+            while let Some(link_ch) = chars.next() {
+                if link_ch == ']' && chars.peek() == Some(&']') {
+                    chars.next();
+                    found_closing = true;
+                    break;
+                }
+                link_content.push(link_ch);
+            }
+
+            if found_closing && !link_content.trim().is_empty() {
+                let mut parts = link_content.splitn(2, '|');
+                let target = parts.next().unwrap_or("").trim();
+                let alias = parts.next().map(str::trim).filter(|value| !value.is_empty());
+                let label = alias.unwrap_or(target);
+                let resolved = resolve_link(target, current_file, available_files);
+                result.push_str(&format!("[{}]({})", label, resolved));
+            } else {
+                result.push('[');
+                result.push('[');
+                result.push_str(&link_content);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+fn resolve_link(link: &str, current_file: &str, available_files: &[String]) -> String {
+    let candidates = build_link_candidates(link, current_file);
+
+    for candidate in candidates {
+        let normalized_candidate = normalize_link_key(&candidate);
+        if let Some(file) = available_files.iter().find(|file| {
+            normalize_link_key(&strip_markdown_extension(file)) == normalized_candidate
+        }) {
+            return markdown_path_to_relative_html_href(file, current_file);
+        }
+    }
+
+    let target_name = path_basename(&normalize_link_target(link));
+    let current_dir = path_dirname(&strip_markdown_extension(current_file));
+    let mut fallback_matches: Vec<&String> = available_files
+        .iter()
+        .filter(|file| normalize_link_key(&strip_markdown_extension(&path_basename(file))) == normalize_link_key(&target_name))
+        .collect();
+
+    fallback_matches.sort_by_key(|file| path_distance(&current_dir, file));
+
+    if let Some(best_match) = fallback_matches.first() {
+        return markdown_path_to_relative_html_href(best_match, current_file);
+    }
+
+    markdown_path_to_relative_html_href(&format!("{}.md", normalize_link_target(link)), current_file)
+}
+
+fn normalize_link_target(value: &str) -> String {
+    let normalized = value
+        .trim()
+        .split(['#', '?'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string();
+
+    normalized
+        .trim_end_matches("/index.html")
+        .trim_end_matches(".html")
+        .trim_end_matches(".markdown")
+        .trim_end_matches(".md")
+        .to_string()
+}
+
+fn strip_markdown_extension(value: &str) -> String {
+    value
+        .trim_end_matches(".markdown")
+        .trim_end_matches(".md")
+        .to_string()
+}
+
+fn build_link_candidates(link: &str, current_file: &str) -> Vec<String> {
+    let target = normalize_link_target(link);
+    if target.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = vec![target.clone()];
+    let mut current_dir = path_dirname(&strip_markdown_extension(current_file));
+    while !current_dir.is_empty() {
+        candidates.push(format!("{}/{}", current_dir, target));
+        current_dir = path_dirname(&current_dir);
+    }
+    candidates
+}
+
+fn markdown_path_to_html_path(path: &str) -> String {
+    let clean = strip_markdown_extension(path).replace('\\', "/");
+    if clean.is_empty() || clean == "index" {
+        "index.html".to_string()
+    } else if clean.ends_with("/index") {
+        format!("{}.html", clean)
+    } else {
+        format!("{}/index.html", clean)
+    }
+}
+
+fn markdown_path_to_html_href(path: &str) -> String {
+    markdown_path_to_html_path(path).replace(' ', "%20")
+}
+
+fn markdown_path_to_relative_html_href(path: &str, current_file: &str) -> String {
+    let target_html = markdown_path_to_html_path(path);
+    let current_html = markdown_path_to_html_path(current_file);
+    let current_dir = path_dirname(&current_html);
+
+    let from_parts: Vec<&str> = current_dir
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let to_parts: Vec<&str> = target_html
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    let mut shared = 0;
+    while shared < from_parts.len()
+        && shared < to_parts.len()
+        && from_parts[shared] == to_parts[shared]
+    {
+        shared += 1;
+    }
+
+    let mut segments: Vec<&str> = Vec::new();
+    for _ in 0..(from_parts.len() - shared) {
+        segments.push("..");
+    }
+    for part in to_parts.iter().skip(shared) {
+        segments.push(part);
+    }
+
+    if segments.is_empty() {
+        "index.html".to_string()
+    } else {
+        segments.join("/").replace(' ', "%20")
+    }
+}
+
+fn path_dirname(value: &str) -> String {
+    match value.rsplit_once('/') {
+        Some((parent, _)) => parent.to_string(),
+        None => String::new(),
+    }
+}
+
+fn path_basename(value: &str) -> String {
+    value.rsplit('/').next().unwrap_or(value).to_string()
+}
+
+fn path_distance(current_dir: &str, file_path: &str) -> usize {
+    let current_parts: Vec<&str> = current_dir.split('/').filter(|part| !part.is_empty()).collect();
+    let file_dir = path_dirname(&strip_markdown_extension(file_path));
+    let file_parts: Vec<&str> = file_dir.split('/').filter(|part| !part.is_empty()).collect();
+    let mut shared = 0;
+    while shared < current_parts.len()
+        && shared < file_parts.len()
+        && current_parts[shared] == file_parts[shared]
+    {
+        shared += 1;
+    }
+    (current_parts.len() - shared) + (file_parts.len() - shared)
+}
+
+fn normalize_link_key(value: &str) -> String {
+    value
+        .to_lowercase()
+        .replace("%20", " ")
+        .replace('_', " ")
+        .replace('\\', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn ensure_directory_style_html_aliases(output_dir: &Path) -> Result<(), String> {
+    for entry in walkdir::WalkDir::new(output_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if !entry.path().extension().map_or(false, |ext| ext == "html") {
+            continue;
+        }
+
+        let relative = entry
+            .path()
+            .strip_prefix(output_dir)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        if relative == "index.html" || relative.ends_with("/index.html") || relative == "404.html" || relative == "print.html" {
+            continue;
+        }
+
+        let alias_relative = markdown_path_to_html_href(&relative);
+        let alias_path = output_dir.join(alias_relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if alias_path.exists() {
+            continue;
+        }
+        if let Some(parent) = alias_path.parent() {
+            if parent.exists() && parent.is_file() {
+                continue;
+            }
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    continue;
+                }
+                return Err(err.to_string());
+            }
+        }
+        if let Err(err) = std::fs::copy(entry.path(), alias_path) {
+            if err.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(err.to_string());
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -666,6 +974,9 @@ async fn run_mkdocs(
 
             // mkdocs outputs to site_dir as configured in mkdocs.yml
             let output_path = find_build_output(project_dir);
+            if output.status.success() {
+                ensure_directory_style_html_aliases(Path::new(&output_path))?;
+            }
 
             Ok(BuildResult {
                 success: output.status.success(),
@@ -738,4 +1049,260 @@ fn find_mkdocs() -> String {
 
     // 3. Fall back — let the OS find it
     "mkdocs".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- normalize_link_key ---
+
+    #[test]
+    fn normalize_link_key_lowercases() {
+        assert_eq!(normalize_link_key("Hello World"), "hello world");
+    }
+
+    #[test]
+    fn normalize_link_key_replaces_percent20() {
+        assert_eq!(normalize_link_key("hello%20world"), "hello world");
+    }
+
+    #[test]
+    fn normalize_link_key_replaces_underscores() {
+        assert_eq!(normalize_link_key("hello_world"), "hello world");
+    }
+
+    #[test]
+    fn normalize_link_key_collapses_spaces() {
+        assert_eq!(normalize_link_key("hello  world"), "hello world");
+    }
+
+    #[test]
+    fn normalize_link_key_normalises_backslashes() {
+        assert_eq!(normalize_link_key("a\\b"), "a/b");
+    }
+
+    // --- strip_markdown_extension ---
+
+    #[test]
+    fn strip_md_extension() {
+        assert_eq!(strip_markdown_extension("foo.md"), "foo");
+    }
+
+    #[test]
+    fn strip_markdown_extension_long() {
+        assert_eq!(strip_markdown_extension("foo.markdown"), "foo");
+    }
+
+    #[test]
+    fn strip_extension_leaves_html() {
+        assert_eq!(strip_markdown_extension("foo.html"), "foo.html");
+    }
+
+    #[test]
+    fn strip_extension_handles_path() {
+        assert_eq!(strip_markdown_extension("a/b/foo.md"), "a/b/foo");
+    }
+
+    // --- normalize_link_target ---
+
+    #[test]
+    fn normalize_link_target_strips_md() {
+        assert_eq!(normalize_link_target("foo.md"), "foo");
+    }
+
+    #[test]
+    fn normalize_link_target_strips_html() {
+        assert_eq!(normalize_link_target("foo.html"), "foo");
+    }
+
+    #[test]
+    fn normalize_link_target_strips_index_html() {
+        assert_eq!(normalize_link_target("foo/index.html"), "foo");
+    }
+
+    #[test]
+    fn normalize_link_target_strips_dotslash() {
+        assert_eq!(normalize_link_target("./foo"), "foo");
+    }
+
+    #[test]
+    fn normalize_link_target_strips_anchor() {
+        assert_eq!(normalize_link_target("foo#section"), "foo");
+    }
+
+    #[test]
+    fn normalize_link_target_strips_query() {
+        assert_eq!(normalize_link_target("foo?bar=1"), "foo");
+    }
+
+    // --- path_dirname / path_basename ---
+
+    #[test]
+    fn path_dirname_returns_parent() {
+        assert_eq!(path_dirname("a/b/c.md"), "a/b");
+    }
+
+    #[test]
+    fn path_dirname_toplevel_returns_empty() {
+        assert_eq!(path_dirname("foo.md"), "");
+    }
+
+    #[test]
+    fn path_basename_returns_filename() {
+        assert_eq!(path_basename("a/b/c.md"), "c.md");
+    }
+
+    #[test]
+    fn path_basename_toplevel() {
+        assert_eq!(path_basename("foo.md"), "foo.md");
+    }
+
+    // --- markdown_path_to_html_href ---
+
+    #[test]
+    fn href_regular_page() {
+        assert_eq!(markdown_path_to_html_href("section/page.md"), "section/page/index.html");
+    }
+
+    #[test]
+    fn href_toplevel_page() {
+        assert_eq!(markdown_path_to_html_href("page.md"), "page/index.html");
+    }
+
+    #[test]
+    fn href_index_file() {
+        assert_eq!(markdown_path_to_html_href("index.md"), "index.html");
+    }
+
+    #[test]
+    fn href_section_index() {
+        assert_eq!(markdown_path_to_html_href("section/index.md"), "section/index.html");
+    }
+
+    #[test]
+    fn href_empty_string() {
+        assert_eq!(markdown_path_to_html_href(""), "index.html");
+    }
+
+    #[test]
+    fn href_space_encoded() {
+        assert_eq!(markdown_path_to_html_href("my page.md"), "my%20page/index.html");
+    }
+
+    // --- build_link_candidates ---
+
+    #[test]
+    fn candidates_include_bare_target() {
+        let c = build_link_candidates("Page", "section/file.md");
+        assert!(c.contains(&"Page".to_string()));
+    }
+
+    #[test]
+    fn candidates_include_contextual_paths() {
+        let c = build_link_candidates("Page", "a/b/file.md");
+        assert!(c.contains(&"a/b/Page".to_string()));
+        assert!(c.contains(&"a/Page".to_string()));
+        assert!(c.contains(&"Page".to_string()));
+    }
+
+    #[test]
+    fn candidates_empty_for_empty_target() {
+        assert!(build_link_candidates("", "a/b/file.md").is_empty());
+    }
+
+    #[test]
+    fn candidates_strip_md_from_target() {
+        let c = build_link_candidates("Page.md", "section/file.md");
+        assert!(c.contains(&"Page".to_string()));
+        assert!(!c.iter().any(|s| s.contains(".md")));
+    }
+
+    // --- path_distance ---
+
+    #[test]
+    fn distance_same_directory() {
+        assert_eq!(path_distance("a/b", "a/b/other.md"), 0);
+    }
+
+    #[test]
+    fn distance_sibling_directory() {
+        assert_eq!(path_distance("a/b", "a/c/page.md"), 2);
+    }
+
+    #[test]
+    fn distance_increases_with_depth() {
+        let near = path_distance("a/b", "a/b/page.md");
+        let far = path_distance("a/b", "x/y/z/page.md");
+        assert!(far > near);
+    }
+
+    #[test]
+    fn distance_from_root() {
+        assert_eq!(path_distance("", "a/page.md"), 1);
+    }
+
+    // --- resolve_link (integration) ---
+
+    fn files(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_exact_match() {
+        let available = files(&["intro.md", "chapter1/overview.md"]);
+        assert_eq!(resolve_link("intro", "chapter1/overview.md", &available), "../../intro/index.html");
+    }
+
+    #[test]
+    fn resolve_sibling_file() {
+        let available = files(&["chapter1/overview.md", "chapter1/detail.md"]);
+        assert_eq!(
+            resolve_link("detail", "chapter1/overview.md", &available),
+            "../detail/index.html"
+        );
+    }
+
+    #[test]
+    fn resolve_prefers_closer_file_when_ambiguous() {
+        let available = files(&["chapter1/overview.md", "chapter2/overview.md"]);
+        // linking from chapter1 — should prefer chapter1/overview
+        assert_eq!(
+            resolve_link("overview", "chapter1/detail.md", &available),
+            "../overview/index.html"
+        );
+    }
+
+    #[test]
+    fn resolve_fallback_when_not_found() {
+        let available = files(&["chapter1/overview.md"]);
+        // nonexistent → should return a generated href
+        let href = resolve_link("nonexistent", "chapter1/overview.md", &available);
+        assert!(href.contains("nonexistent"));
+    }
+
+    #[test]
+    fn resolve_case_insensitive() {
+        let available = files(&["intro.md"]);
+        assert_eq!(resolve_link("INTRO", "chapter1/overview.md", &available), "../../intro/index.html");
+    }
+
+    #[test]
+    fn resolve_link_with_md_extension() {
+        let available = files(&["intro.md"]);
+        assert_eq!(resolve_link("intro.md", "chapter1/overview.md", &available), "../../intro/index.html");
+    }
+
+    #[test]
+    fn resolve_underscore_equals_space() {
+        let available = files(&["my_page.md"]);
+        assert_eq!(
+            resolve_link("my page", "intro.md", &available),
+            "../my_page/index.html"
+        );
+    }
 }

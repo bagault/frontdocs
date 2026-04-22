@@ -23,6 +23,18 @@ import { marked } from 'marked';
 import katex from 'katex';
 import { open } from '@tauri-apps/plugin-shell';
 import { useAppStore } from '../../stores/app';
+import {
+  normalizeLinkKey,
+  stripMarkdownExtension,
+  normalizeRelativeLinkTarget,
+  pathDirname,
+  pathBasename,
+  buildLinkCandidates,
+  pathDistance,
+  markdownPathToHtmlHref,
+  markdownPathToRelativeHtmlHref,
+  resolveWorkspaceFile as resolveWorkspaceFileUtil,
+} from '../../utils/wikilinks';
 
 const props = defineProps<{
   content: string;
@@ -73,18 +85,19 @@ function handleClick(e: MouseEvent) {
 }
 
 function resolveInternalLink(href: string): string | null {
-  if (!appStore.workspacePath) return null;
-  // Strip leading ./ or / and normalize path separators
-  const clean = href.replace(/^\.?\//, '').replace(/\\/g, '/');
-  // Try to find matching file in workspace (normalize both sides for cross-platform)
-  const match = appStore.files.find(f => {
-    const rel = f.relative_path.replace(/\\/g, '/');
-    return rel === clean ||
-      rel === clean + '.md' ||
-      f.name === clean ||
-      f.name === clean + '.md';
-  });
+  const match = resolveWorkspaceFile(href);
   return match?.path || null;
+}
+
+function currentRelativePath(): string {
+  if (!appStore.workspacePath || !appStore.currentFile) return '';
+  const workspace = appStore.workspacePath.replace(/\\/g, '/').replace(/\/+$/, '');
+  const filePath = appStore.currentFile.path.replace(/\\/g, '/');
+  return filePath.startsWith(`${workspace}/`) ? filePath.slice(workspace.length + 1) : '';
+}
+
+function resolveWorkspaceFile(link: string) {
+  return resolveWorkspaceFileUtil(link, currentRelativePath(), appStore.files);
 }
 
 function confirmExternal() {
@@ -129,29 +142,22 @@ function stripFrontmatter(content: string): string {
 }
 
 function convertWikiLinks(content: string): string {
-  // Convert [[link]] to [link](link.md) or [link name|link]] to [link name](link.md)
-  return content.replace(/\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]/g, (match, link, displayText) => {
-    const display = displayText || link;
-    const resolved = findLinkPath(link);
+  return content.replace(/\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]/g, (_match, target, alias) => {
+    const display = (alias || target).trim();
+    const resolved = findLinkPath(target.trim());
     return `[${display}](${resolved})`;
   });
 }
 
 function findLinkPath(link: string): string {
-  if (!appStore.workspacePath) {
-    // Fallback if no workspace
-    return link.toLowerCase().replace(/\s+/g, '_') + '.md';
+  const match = resolveWorkspaceFile(link);
+  const currentPath = currentRelativePath();
+  if (match) {
+    return markdownPathToRelativeHtmlHref(match.relative_path, currentPath);
   }
 
-  const linkLower = link.toLowerCase().replace(/\s+/g, '_');
-  // Try to find matching file in workspace
-  const match = appStore.files.find(f => {
-    const name = f.name.replace('.md', '').replace('.markdown', '').toLowerCase().replace(/\s+/g, '_');
-    const relPath = f.relative_path.replace('.md', '').replace('.markdown', '').toLowerCase().replace(/\s+/g, '_');
-    return name === linkLower || relPath === linkLower;
-  });
-
-  return match ? match.relative_path : (linkLower + '.md');
+  const normalizedTarget = normalizeRelativeLinkTarget(link) || link.trim();
+  return markdownPathToRelativeHtmlHref(`${normalizedTarget}.md`, currentPath);
 }
 
 const rendered = computed(() => {

@@ -1,7 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+fn default_processor() -> String {
+    "mkdocs".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct AppSettings {
     pub output_format: String,       // "folder" or "archive"
     pub output_path: Option<String>, // None = save near input
@@ -13,6 +18,8 @@ pub struct AppSettings {
     pub external_model: String,
     pub theme: String,
     pub base_url: String,
+    #[serde(default = "default_processor")]
+    pub processor: String,
 }
 
 impl Default for AppSettings {
@@ -28,6 +35,7 @@ impl Default for AppSettings {
             external_model: String::new(),
             theme: "dark".to_string(),
             base_url: "https://frontdocs.local".to_string(),
+            processor: default_processor(),
         }
     }
 }

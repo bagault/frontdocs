@@ -35,7 +35,18 @@
           </v-radio>
         </v-radio-group>
 
+        <v-alert
+          v-if="usesProjectDist"
+          type="info"
+          variant="tonal"
+          density="compact"
+          class="mb-3"
+        >
+          This project will export directly to <strong>{{ outputDisplay }}</strong>.
+        </v-alert>
+
         <v-text-field
+          v-else
           :model-value="outputDisplay"
           label="Output location"
           readonly
@@ -78,8 +89,16 @@ const format = ref(settingsStore.current.output_format || 'folder');
 const outputPath = ref<string | null>(settingsStore.current.output_path);
 const exporting = ref(false);
 
-const outputDisplay = computed(
-  () => outputPath.value || 'Default (next to input folder)'
+const outputDisplay = computed(() => {
+  if (outputPath.value) return outputPath.value;
+  if (appStore.isProject && format.value === 'folder' && appStore.workspacePath) {
+    return appStore.workspacePath.replace(/[\\/]+$/, '') + '/dist';
+  }
+  return 'Default (next to input folder)';
+});
+
+const usesProjectDist = computed(
+  () => appStore.isProject && format.value === 'folder' && !outputPath.value && !!appStore.workspacePath
 );
 
 async function selectOutput() {

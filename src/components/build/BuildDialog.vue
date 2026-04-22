@@ -28,7 +28,18 @@
             </v-radio>
           </v-radio-group>
 
+          <v-alert
+            v-if="usesProjectDist"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            This project will export directly to <strong>{{ outputDisplay }}</strong>.
+          </v-alert>
+
           <v-text-field
+            v-else
             :model-value="outputDisplay"
             label="Output location"
             readonly
@@ -119,11 +130,15 @@ const progressColor = computed(() => {
 
 const outputDisplay = computed(() => {
   if (outputPath.value) return outputPath.value;
-  if (appStore.isProject && appStore.workspacePath) {
+  if (appStore.isProject && format.value === 'folder' && appStore.workspacePath) {
     return appStore.workspacePath.replace(/[\\/]+$/, '') + '/dist';
   }
   return 'Default (next to input folder)';
 });
+
+const usesProjectDist = computed(
+  () => appStore.isProject && format.value === 'folder' && !outputPath.value && !!appStore.workspacePath
+);
 
 watch(() => appStore.buildLog.length, () => {
   nextTick(() => {

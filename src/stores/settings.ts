@@ -20,6 +20,16 @@ const defaultSettings: AppSettings = {
 export const useSettingsStore = defineStore('settings', () => {
   const current = reactive<AppSettings>({ ...defaultSettings });
   const loaded = ref(false);
+  const saveTimer = ref<ReturnType<typeof setTimeout> | null>(null);
+
+  async function persist(settings: AppSettings) {
+    try {
+      await invoke('save_settings', { settings });
+    } catch (e) {
+      console.error('Failed to save settings:', e);
+      throw e;
+    }
+  }
 
   async function load() {
     try {
@@ -33,16 +43,32 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function save() {
-    try {
-      await invoke('save_settings', { settings: { ...current } });
-    } catch (e) {
-      console.error('Failed to save settings:', e);
-      throw e;
+    if (saveTimer.value) {
+      clearTimeout(saveTimer.value);
+      saveTimer.value = null;
     }
+    await persist({ ...current });
+  }
+
+  function saveSoon() {
+    if (!loaded.value) return;
+    if (saveTimer.value) {
+      clearTimeout(saveTimer.value);
+    }
+    saveTimer.value = setTimeout(() => {
+      saveTimer.value = null;
+      void persist({ ...current });
+    }, 250);
   }
 
   function update(partial: Partial<AppSettings>) {
     Object.assign(current, partial);
+    saveSoon();
+  }
+
+  function reset() {
+    Object.assign(current, defaultSettings);
+    saveSoon();
   }
 
   return {
@@ -50,6 +76,9 @@ export const useSettingsStore = defineStore('settings', () => {
     loaded,
     load,
     save,
+    saveSoon,
     update,
+    reset,
+    defaultSettings,
   };
 });

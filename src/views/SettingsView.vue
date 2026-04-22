@@ -165,18 +165,15 @@
       </v-card-text>
     </v-card>
 
-    <!-- Save -->
-    <div class="d-flex justify-end gap-2">
-      <v-btn variant="text" @click="resetSettings">Reset to Defaults</v-btn>
-      <v-btn color="primary" @click="handleSave" :loading="saving" prepend-icon="mdi-content-save">
-        Save Settings
-      </v-btn>
+    <div class="d-flex justify-space-between align-center gap-2 flex-wrap">
+      <span class="text-caption text-medium-emphasis">Changes are applied automatically.</span>
+      <v-btn variant="text" @click="resetSettings">Default</v-btn>
     </div>
   </v-container>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useAppStore } from '../stores/app';
 import { useSettingsStore } from '../stores/settings';
@@ -188,8 +185,8 @@ const aiStore = useAiStore();
 
 const settings = reactive({ ...settingsStore.current });
 const showKey = ref(false);
-const saving = ref(false);
 const refreshing = ref(false);
+const initialized = ref(false);
 
 const outputPathDisplay = computed(
   () => settings.output_path || 'Default (project: dist/, otherwise next to input folder)'
@@ -197,8 +194,14 @@ const outputPathDisplay = computed(
 
 onMounted(async () => {
   Object.assign(settings, settingsStore.current);
+  initialized.value = true;
   await aiStore.checkOllama();
 });
+
+watch(settings, (value) => {
+  if (!initialized.value) return;
+  settingsStore.update({ ...value });
+}, { deep: true });
 
 async function refreshModels() {
   refreshing.value = true;
@@ -218,38 +221,16 @@ async function selectOutputPath() {
   }
 }
 
-async function handleSave() {
-  saving.value = true;
-  try {
-    settingsStore.update({ ...settings });
-    await settingsStore.save();
-    appStore.showMessage('Settings saved');
-  } catch (e: any) {
-    appStore.showMessage(e.toString(), 'error');
-  } finally {
-    saving.value = false;
-  }
-}
-
 function resetSettings() {
-  Object.assign(settings, {
-    output_format: 'folder',
-    output_path: null,
-    ai_provider: 'ollama',
-    ollama_url: 'http://localhost:11434',
-    ollama_model: '',
-    external_api_url: '',
-    external_api_key: '',
-    external_model: '',
-    theme: 'dark',
-    base_url: 'https://frontdocs.local',
-  });
+  settingsStore.reset();
+  Object.assign(settings, settingsStore.current);
+  appStore.showMessage('Settings restored to defaults');
 }
 </script>
 
 <style scoped>
 .settings-view {
-  overflow-y: auto;
-  height: 100%;
+  min-height: 100%;
+  padding-bottom: 48px;
 }
 </style>

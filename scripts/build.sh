@@ -127,6 +127,22 @@ else
   info "mkdocs sidecar found: $MKDOCS_SIDECAR"
 fi
 
+# ── Prepare mdbook sidecar ──────────────────────────────────────────────────
+MDBOOK_SIDECAR="src-tauri/binaries/mdbook-${TRIPLE}"
+if [[ ! -f "$MDBOOK_SIDECAR" ]]; then
+  info "mdbook sidecar not found — trying to copy local mdbook binary..."
+  if command -v mdbook >/dev/null 2>&1; then
+    cp "$(command -v mdbook)" "$MDBOOK_SIDECAR"
+    chmod +x "$MDBOOK_SIDECAR"
+    ok "mdbook sidecar ready"
+  else
+    err "mdbook not found. Install it with: cargo install mdbook"
+    exit 1
+  fi
+else
+  info "mdbook sidecar found: $MDBOOK_SIDECAR"
+fi
+
 # ── Build ───────────────────────────────────────────────────────────────────
 if [[ "$MODE" == "dev" ]]; then
   info "Starting development build..."

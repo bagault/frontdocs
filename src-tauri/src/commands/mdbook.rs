@@ -77,9 +77,8 @@ The `dist/` folder is ready to deploy to GitHub Pages. Configure your repository
     );
     std::fs::write(root.join("README.md"), readme_content).map_err(|e| e.to_string())?;
 
-    // Ensure SUMMARY.md exists (mdBook requires it)
-    ensure_summary_md(&src_dir)?;
     ensure_index_md(&src_dir)?;
+    ensure_summary_md(&src_dir)?;
 
     // Write book.toml
     let book_toml = format!(
@@ -107,17 +106,20 @@ pub async fn build_site_mdbook(
     output_folder: String,
 ) -> Result<BuildResult, String> {
     let source = PathBuf::from(&source_folder);
+    let output = PathBuf::from(&output_folder);
 
     if !source.exists() {
         return Err("Source folder does not exist".to_string());
     }
 
+    clean_output_dir(&output)?;
+
     let is_project = source.join("book.toml").exists();
 
     if is_project {
-        build_mdbook_project(&source, &PathBuf::from(&output_folder)).await
+        build_mdbook_project(&source, &output).await
     } else {
-        build_from_raw_markdown(&source, &PathBuf::from(&output_folder)).await
+        build_from_raw_markdown(&source, &output).await
     }
 }
 
@@ -146,6 +148,11 @@ async fn build_mdbook_project(
         std::fs::remove_dir_all(&build_dir).map_err(|e| e.to_string())?;
     }
     copy_dir_recursive(project_dir, &build_dir)?;
+
+    let docs_dir = build_dir.join("src");
+    if docs_dir.exists() {
+        preprocess_wiki_links_in_dir(&docs_dir)?;
+    }
 
     // Patch book.toml to set build-dir to the desired output
     let output_str = normalize_path(&output_dir.to_string_lossy());
@@ -207,9 +214,8 @@ async fn build_from_raw_markdown(
     std::fs::create_dir_all(&src_dir).map_err(|e| e.to_string())?;
     copy_markdown_content(source, &src_dir)?;
 
-    // Ensure SUMMARY.md and index
-    ensure_summary_md(&src_dir)?;
     ensure_index_md(&src_dir)?;
+    ensure_summary_md(&src_dir)?;
 
     let output_str = normalize_path(&output_dir.to_string_lossy());
 
@@ -255,6 +261,13 @@ fn normalize_path(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+fn clean_output_dir(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn capitalize_words(s: &str) -> String {
     s.split_whitespace()
         .map(|w| {
@@ -278,7 +291,7 @@ fn move_markdown_content(root: &Path, src_dir: &Path) -> Result<(), String> {
 
         // Skip special dirs/files
         if name == "src"
-            || name == "book"
+            || name == "dist"
             || name == "assets"
             || name == "book.toml"
             || name.starts_with('.')
@@ -312,6 +325,8 @@ fn move_markdown_content(root: &Path, src_dir: &Path) -> Result<(), String> {
 }
 
 fn copy_markdown_content(source: &Path, dest: &Path) -> Result<(), String> {
+    let available_files = collect_markdown_files(source)?;
+
     for entry in WalkDir::new(source)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -327,6 +342,8 @@ fn copy_markdown_content(source: &Path, dest: &Path) -> Result<(), String> {
         {
             let content = std::fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
             let body = strip_frontmatter(&content).trim_start().to_string();
+            let current_file = relative.to_string_lossy().replace('\\', "/");
+            let body = convert_wiki_links(&body, &current_file, &available_files);
             let dest_file = dest.join(relative);
             if let Some(parent) = dest_file.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -364,6 +381,295 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
             std::fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
         }
     }
+    Ok(())
+}
+
+fn preprocess_wiki_links_in_dir(dir: &Path) -> Result<(), String> {
+    let available_files = collect_markdown_files(dir)?;
+
+    for entry in WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if entry.path().extension().map_or(false, |ext| ext == "md" || ext == "markdown") {
+            let content = std::fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
+            let current_file = entry
+                .path()
+                .strip_prefix(dir)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            let converted = convert_wiki_links(&content, &current_file, &available_files);
+            std::fs::write(entry.path(), converted).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_markdown_files(root: &Path) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if entry.path().extension().map_or(false, |ext| ext == "md" || ext == "markdown") {
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push(relative);
+        }
+    }
+
+    Ok(files)
+}
+
+fn convert_wiki_links(content: &str, current_file: &str, available_files: &[String]) -> String {
+    let mut result = String::new();
+    let mut chars = content.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '[' && chars.peek() == Some(&'[') {
+            chars.next();
+            let mut link_content = String::new();
+            let mut found_closing = false;
+
+            while let Some(link_ch) = chars.next() {
+                if link_ch == ']' && chars.peek() == Some(&']') {
+                    chars.next();
+                    found_closing = true;
+                    break;
+                }
+                link_content.push(link_ch);
+            }
+
+            if found_closing && !link_content.trim().is_empty() {
+                let mut parts = link_content.splitn(2, '|');
+                let target = parts.next().unwrap_or("").trim();
+                let alias = parts.next().map(str::trim).filter(|value| !value.is_empty());
+                let label = alias.unwrap_or(target);
+                let resolved = resolve_link(target, current_file, available_files);
+                result.push_str(&format!("[{}]({})", label, resolved));
+            } else {
+                result.push('[');
+                result.push('[');
+                result.push_str(&link_content);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+fn resolve_link(link: &str, current_file: &str, available_files: &[String]) -> String {
+    let candidates = build_link_candidates(link, current_file);
+
+    for candidate in candidates {
+        let normalized_candidate = normalize_link_key(&candidate);
+        if let Some(file) = available_files.iter().find(|file| {
+            normalize_link_key(&strip_markdown_extension(file)) == normalized_candidate
+        }) {
+            return markdown_path_to_relative_html_href(file, current_file);
+        }
+    }
+
+    let target_name = path_basename(&normalize_link_target(link));
+    let current_dir = path_dirname(&strip_markdown_extension(current_file));
+    let mut fallback_matches: Vec<&String> = available_files
+        .iter()
+        .filter(|file| normalize_link_key(&strip_markdown_extension(&path_basename(file))) == normalize_link_key(&target_name))
+        .collect();
+
+    fallback_matches.sort_by_key(|file| path_distance(&current_dir, file));
+
+    if let Some(best_match) = fallback_matches.first() {
+        return markdown_path_to_relative_html_href(best_match, current_file);
+    }
+
+    markdown_path_to_relative_html_href(&format!("{}.md", normalize_link_target(link)), current_file)
+}
+
+fn normalize_link_target(value: &str) -> String {
+    let normalized = value
+        .trim()
+        .split(['#', '?'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string();
+
+    normalized
+        .trim_end_matches("/index.html")
+        .trim_end_matches(".html")
+        .trim_end_matches(".markdown")
+        .trim_end_matches(".md")
+        .to_string()
+}
+
+fn strip_markdown_extension(value: &str) -> String {
+    value
+        .trim_end_matches(".markdown")
+        .trim_end_matches(".md")
+        .to_string()
+}
+
+fn build_link_candidates(link: &str, current_file: &str) -> Vec<String> {
+    let target = normalize_link_target(link);
+    if target.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = vec![target.clone()];
+    let mut current_dir = path_dirname(&strip_markdown_extension(current_file));
+    while !current_dir.is_empty() {
+        candidates.push(format!("{}/{}", current_dir, target));
+        current_dir = path_dirname(&current_dir);
+    }
+    candidates
+}
+
+fn markdown_path_to_html_path(path: &str) -> String {
+    let clean = strip_markdown_extension(path).replace('\\', "/");
+    if clean.is_empty() || clean == "index" {
+        "index.html".to_string()
+    } else if clean.ends_with("/index") {
+        format!("{}.html", clean)
+    } else {
+        format!("{}/index.html", clean)
+    }
+}
+
+fn markdown_path_to_html_href(path: &str) -> String {
+    markdown_path_to_html_path(path).replace(' ', "%20")
+}
+
+fn markdown_path_to_relative_html_href(path: &str, current_file: &str) -> String {
+    let target_html = markdown_path_to_html_path(path);
+    let current_html = markdown_path_to_html_path(current_file);
+    let current_dir = path_dirname(&current_html);
+
+    let from_parts: Vec<&str> = current_dir
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let to_parts: Vec<&str> = target_html
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    let mut shared = 0;
+    while shared < from_parts.len()
+        && shared < to_parts.len()
+        && from_parts[shared] == to_parts[shared]
+    {
+        shared += 1;
+    }
+
+    let mut segments: Vec<&str> = Vec::new();
+    for _ in 0..(from_parts.len() - shared) {
+        segments.push("..");
+    }
+    for part in to_parts.iter().skip(shared) {
+        segments.push(part);
+    }
+
+    if segments.is_empty() {
+        "index.html".to_string()
+    } else {
+        segments.join("/").replace(' ', "%20")
+    }
+}
+
+fn path_dirname(value: &str) -> String {
+    match value.rsplit_once('/') {
+        Some((parent, _)) => parent.to_string(),
+        None => String::new(),
+    }
+}
+
+fn path_basename(value: &str) -> String {
+    value.rsplit('/').next().unwrap_or(value).to_string()
+}
+
+fn path_distance(current_dir: &str, file_path: &str) -> usize {
+    let current_parts: Vec<&str> = current_dir.split('/').filter(|part| !part.is_empty()).collect();
+    let file_dir = path_dirname(&strip_markdown_extension(file_path));
+    let file_parts: Vec<&str> = file_dir.split('/').filter(|part| !part.is_empty()).collect();
+    let mut shared = 0;
+    while shared < current_parts.len()
+        && shared < file_parts.len()
+        && current_parts[shared] == file_parts[shared]
+    {
+        shared += 1;
+    }
+    (current_parts.len() - shared) + (file_parts.len() - shared)
+}
+
+fn normalize_link_key(value: &str) -> String {
+    value
+        .to_lowercase()
+        .replace("%20", " ")
+        .replace('_', " ")
+        .replace('\\', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn ensure_directory_style_html_aliases(output_dir: &Path) -> Result<(), String> {
+    for entry in WalkDir::new(output_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if !entry.path().extension().map_or(false, |ext| ext == "html") {
+            continue;
+        }
+
+        let relative = entry
+            .path()
+            .strip_prefix(output_dir)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        if relative == "index.html" || relative.ends_with("/index.html") || relative == "404.html" || relative == "print.html" {
+            continue;
+        }
+
+        let alias_relative = markdown_path_to_html_href(&relative);
+        let alias_path = output_dir.join(alias_relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if alias_path.exists() {
+            continue;
+        }
+        if let Some(parent) = alias_path.parent() {
+            if parent.exists() && parent.is_file() {
+                continue;
+            }
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    continue;
+                }
+                return Err(err.to_string());
+            }
+        }
+        if let Err(err) = std::fs::copy(entry.path(), alias_path) {
+            if err.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(err.to_string());
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -411,6 +717,9 @@ async fn run_mdbook(project_dir: &Path) -> Result<BuildResult, String> {
             let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
             let output_path = find_build_output(project_dir);
+            if output.status.success() {
+                ensure_directory_style_html_aliases(Path::new(&output_path))?;
+            }
 
             Ok(BuildResult {
                 success: output.status.success(),
@@ -464,7 +773,31 @@ fn find_build_output(project_dir: &Path) -> String {
 }
 
 fn find_mdbook() -> String {
-    // Try common mdbook locations
+    // 1. Check for bundled sidecar next to executable
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let sidecar_name = if cfg!(windows) { "mdbook.exe" } else { "mdbook" };
+            let sidecar_path = exe_dir.join(sidecar_name);
+            if sidecar_path.exists() {
+                return sidecar_path.to_string_lossy().to_string();
+            }
+
+            // Fallback for sidecars kept with target triple suffix
+            if let Ok(entries) = std::fs::read_dir(exe_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name == "mdbook" || name == "mdbook.exe" || name.starts_with("mdbook-") {
+                        let path = entry.path();
+                        if path.is_file() {
+                            return path.to_string_lossy().to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Try common system locations
     let candidates: Vec<&str> = if cfg!(windows) {
         vec!["mdbook.exe", "mdbook"]
     } else {
@@ -478,7 +811,7 @@ fn find_mdbook() -> String {
         }
     }
 
-    // Check if mdbook is on PATH
+    // 3. Check if mdbook is on PATH
     let which_cmd = if cfg!(windows) { "where" } else { "which" };
     if let Ok(output) = std::process::Command::new(which_cmd)
         .arg("mdbook")
@@ -492,7 +825,7 @@ fn find_mdbook() -> String {
         }
     }
 
-    // Fall back
+    // 4. Fall back
     "mdbook".to_string()
 }
 
@@ -503,9 +836,51 @@ fn ensure_summary_md(src_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    // Create basic SUMMARY.md
-    std::fs::write(&summary, "# Summary\n\n- [Home](./index.md)\n")
-        .map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+
+    for entry in WalkDir::new(src_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if !entry
+            .path()
+            .extension()
+            .map_or(false, |ext| ext == "md" || ext == "markdown")
+        {
+            continue;
+        }
+
+        let relative = entry
+            .path()
+            .strip_prefix(src_dir)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        if relative == "SUMMARY.md" || relative == "index.md" {
+            continue;
+        }
+
+        let name = entry
+            .path()
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .replace('_', " ");
+
+        entries.push((relative, name));
+    }
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut content = String::from("# Summary\n\n- [Home](./index.md)\n");
+    for (relative, name) in entries {
+        let summary_path = relative.replace(' ', "%20");
+        content.push_str(&format!("- [{}](./{})\n", name, summary_path));
+    }
+
+    std::fs::write(&summary, content).map_err(|e| e.to_string())?;
     Ok(())
 }
 

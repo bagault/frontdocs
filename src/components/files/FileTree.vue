@@ -88,24 +88,6 @@
     />
   </div>
 
-  <v-dialog v-model="showCreateDialog" max-width="400">
-    <v-card>
-      <v-card-title>New Folder</v-card-title>
-      <v-card-text>
-        <v-text-field
-          v-model="newFolderName"
-          label="Folder name"
-          @keyup.enter="confirmCreateFolder"
-          autofocus
-        />
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="showCreateDialog = false">Cancel</v-btn>
-        <v-btn color="primary" @click="confirmCreateFolder">Create</v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
 </template>
 
 <script setup lang="ts">
@@ -127,9 +109,6 @@ const emit = defineEmits<{
 
 const expanded = ref(true);
 const isDragOver = ref(false);
-const showCreateDialog = ref(false);
-const newFolderName = ref('');
-const targetFolderPath = ref('');
 
 function onDragStart(event: DragEvent) {
   if (event.dataTransfer) {
@@ -178,16 +157,7 @@ function openContextMenu(event: MouseEvent) {
 }
 
 function requestCreateFolder() {
-  targetFolderPath.value = props.node.path;
-  newFolderName.value = '';
-  showCreateDialog.value = true;
-}
-
-function confirmCreateFolder() {
-  if (newFolderName.value.trim()) {
-    emit('requestCreateFolder', targetFolderPath.value);
-  }
-  showCreateDialog.value = false;
+  emit('requestCreateFolder', props.node.path);
 }
 </script>
 

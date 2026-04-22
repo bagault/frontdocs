@@ -4,7 +4,7 @@
 
     <SideNav v-if="appStore.hasWorkspace" />
 
-    <v-main>
+    <v-main class="app-main">
       <router-view />
     </v-main>
 
@@ -41,3 +41,10 @@ onMounted(async () => {
   await aiStore.checkOllama();
 });
 </script>
+
+<style scoped>
+.app-main {
+  height: 100vh;
+  overflow-y: auto;
+}
+</style>

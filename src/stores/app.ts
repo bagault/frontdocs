@@ -19,18 +19,51 @@ export const useAppStore = defineStore('app', () => {
 
   const buildLog = ref<string[]>([]);
   const isBuildDialogOpen = ref(false);
+  const projectProcessor = ref<'mkdocs' | 'mdbook' | null>(null);
 
   const hasWorkspace = computed(() => workspacePath.value !== null);
+
+  function normalizePath(value: string): string {
+    return value.replace(/\\/g, '/').replace(/\/+$/, '');
+  }
+
+  function hasWorkspaceSourceDir(sourceDir: string): boolean {
+    const normalizedSourceDir = normalizePath(sourceDir);
+    return files.value.some(file => normalizePath(file.path).startsWith(`${normalizedSourceDir}/`));
+  }
+
+  function getBuildSourceFolder(processor: 'mkdocs' | 'mdbook'): string {
+    const root = workspacePath.value || '';
+    if (!root) return root;
+
+    if (!isProject.value || !projectProcessor.value || projectProcessor.value === processor) {
+      return root;
+    }
+
+    const sourceDir = `${normalizePath(root)}/src`;
+    return hasWorkspaceSourceDir(sourceDir) ? sourceDir : root;
+  }
 
   function showMessage(text: string, color = 'success') {
     snackbar.value = { show: true, text, color };
   }
 
+  async function detectProject(path: string): Promise<'mkdocs' | 'mdbook' | null> {
+    const [mkdocsType, mdbookType] = await Promise.all([
+      invoke<string>('detect_project_type', { folderPath: path }),
+      invoke<string>('detect_project_type_mdbook', { folderPath: path }),
+    ]);
+
+    if (mkdocsType === 'project') return 'mkdocs';
+    if (mdbookType === 'project') return 'mdbook';
+    return null;
+  }
+
   async function openFolder(path: string) {
     isLoading.value = true;
     try {
-      const projectType = await invoke<string>('detect_project_type', { folderPath: path });
-      isProject.value = projectType === 'project';
+      projectProcessor.value = await detectProject(path);
+      isProject.value = projectProcessor.value !== null;
       workspacePath.value = path;
       const result = await invoke<MarkdownFile[]>('list_markdown_files', {
         folderPath: path,
@@ -95,6 +128,7 @@ export const useAppStore = defineStore('app', () => {
     if (!workspacePath.value) return;
     
     const settingsStore = useSettingsStore();
+    let progressInterval: ReturnType<typeof setInterval> | null = null;
     isLoading.value = true;
     buildProgress.value = 0;
     buildLog.value = [];
@@ -107,16 +141,25 @@ export const useAppStore = defineStore('app', () => {
 
       // Use a temp dir for the intermediate mkdocs build
       const buildOutputDir = workspacePath.value + '_build';
+      try {
+        await invoke('remove_dir', { path: buildOutputDir });
+      } catch {
+        // Ignore cleanup issues before a fresh build starts
+      }
 
-      const processor = settingsStore.current.processor || 'mkdocs';
+      const processor = (settingsStore.current.processor || projectProcessor.value || 'mkdocs') as 'mkdocs' | 'mdbook';
+      const sourceFolder = getBuildSourceFolder(processor);
       const buildCommand = processor === 'mdbook' ? 'build_site_mdbook' : 'build_site';
       const processorName = processor === 'mdbook' ? 'mdBook' : 'MkDocs';
       buildLog.value.push(`Starting ${processorName} build...`);
+      if (sourceFolder !== workspacePath.value) {
+        buildLog.value.push(`Using ${sourceFolder.replace(/\\/g, '/')} as source for ${processorName}.`);
+      }
       buildProgress.value = 5;
 
       // Slow logarithmic progress simulation during mkdocs build
       let tick = 0;
-      const progressInterval = setInterval(() => {
+      progressInterval = setInterval(() => {
         tick++;
         // Logarithmic curve: fast start, slow finish. Caps at ~70%
         const target = Math.min(70, 15 * Math.log(tick + 1));
@@ -131,11 +174,14 @@ export const useAppStore = defineStore('app', () => {
       }, 500);
 
       buildOutput.value = await invoke<BuildResult>(buildCommand, {
-        sourceFolder: workspacePath.value,
+        sourceFolder,
         outputFolder: buildOutputDir,
       });
 
-      clearInterval(progressInterval);
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
 
       if (!buildOutput.value.success) {
         buildProgress.value = 100;
@@ -152,8 +198,18 @@ export const useAppStore = defineStore('app', () => {
 
       // Export step
       try {
+        if (format === 'folder' && outputPath) {
+          try {
+            await invoke('remove_dir', { path: outputPath });
+            buildLog.value.push('Removed previous export output.');
+          } catch {
+            // Ignore when output folder does not exist yet.
+          }
+        }
+
+        const exportSource = buildOutput.value.output_path || buildOutputDir;
         const result = await invoke<string>('export_site', {
-          sourcePath: buildOutputDir,
+          sourcePath: exportSource,
           outputFormat: format,
           outputPath: outputPath || null,
         });
@@ -173,6 +229,9 @@ export const useAppStore = defineStore('app', () => {
       buildLog.value.push(`Error: ${e}`);
       showMessage(e.toString(), 'error');
     } finally {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
       isLoading.value = false;
     }
   }
@@ -184,6 +243,7 @@ export const useAppStore = defineStore('app', () => {
     currentFile.value = null;
     buildOutput.value = null;
     undoStack.value = [];
+    projectProcessor.value = null;
   }
 
   function pushUndo() {
@@ -228,7 +288,9 @@ export const useAppStore = defineStore('app', () => {
     undoStack,
     hasWorkspace,
     canUndo,
+    projectProcessor,
     showMessage,
+    detectProject,
     openFolder,
     openFile,
     saveCurrentFile,
