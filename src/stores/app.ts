@@ -1,0 +1,303 @@
+import { defineStore } from 'pinia';
+import { ref, computed } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
+import type { MarkdownFile, FileContent, FileTreeNode, BuildResult } from '../types';
+import { useSettingsStore } from './settings';
+
+export const useAppStore = defineStore('app', () => {
+  const workspacePath = ref<string | null>(null);
+  const files = ref<MarkdownFile[]>([]);
+  const fileTree = ref<FileTreeNode | null>(null);
+  const currentFile = ref<FileContent | null>(null);
+  const isLoading = ref(false);
+  const buildProgress = ref(0);
+  const buildOutput = ref<BuildResult | null>(null);
+  const sideNavOpen = ref(true);
+  const aiPanelOpen = ref(false);
+  const snackbar = ref({ show: false, text: '', color: 'success' });
+  const undoStack = ref<{ path: string; content: string }[]>([]);
+
+  const buildLog = ref<string[]>([]);
+  const isBuildDialogOpen = ref(false);
+  const projectProcessor = ref<'mkdocs' | 'mdbook' | null>(null);
+
+  const hasWorkspace = computed(() => workspacePath.value !== null);
+
+  function normalizePath(value: string): string {
+    return value.replace(/\\/g, '/').replace(/\/+$/, '');
+  }
+
+  function hasWorkspaceSourceDir(sourceDir: string): boolean {
+    const normalizedSourceDir = normalizePath(sourceDir);
+    return files.value.some(file => normalizePath(file.path).startsWith(`${normalizedSourceDir}/`));
+  }
+
+  function getBuildSourceFolder(processor: 'mkdocs' | 'mdbook'): string {
+    const root = workspacePath.value || '';
+    if (!root) return root;
+
+    if (!isProject.value || !projectProcessor.value || projectProcessor.value === processor) {
+      return root;
+    }
+
+    const sourceDir = `${normalizePath(root)}/src`;
+    return hasWorkspaceSourceDir(sourceDir) ? sourceDir : root;
+  }
+
+  function showMessage(text: string, color = 'success') {
+    snackbar.value = { show: true, text, color };
+  }
+
+  async function detectProject(path: string): Promise<'mkdocs' | 'mdbook' | null> {
+    const [mkdocsType, mdbookType] = await Promise.all([
+      invoke<string>('detect_project_type', { folderPath: path }),
+      invoke<string>('detect_project_type_mdbook', { folderPath: path }),
+    ]);
+
+    if (mkdocsType === 'project') return 'mkdocs';
+    if (mdbookType === 'project') return 'mdbook';
+    return null;
+  }
+
+  async function openFolder(path: string) {
+    isLoading.value = true;
+    try {
+      projectProcessor.value = await detectProject(path);
+      isProject.value = projectProcessor.value !== null;
+      workspacePath.value = path;
+      const result = await invoke<MarkdownFile[]>('list_markdown_files', {
+        folderPath: path,
+      });
+      files.value = result;
+      const tree = await invoke<FileTreeNode>('get_file_tree', {
+        folderPath: path,
+      });
+      fileTree.value = tree;
+    } catch (e: any) {
+      showMessage(e.toString(), 'error');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  async function openFile(filePath: string) {
+    isLoading.value = true;
+    try {
+      currentFile.value = await invoke<FileContent>('read_markdown_file', {
+        filePath,
+      });
+    } catch (e: any) {
+      showMessage(e.toString(), 'error');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  async function saveCurrentFile() {
+    if (!currentFile.value) return;
+    try {
+      await invoke('save_markdown_file', {
+        filePath: currentFile.value.path,
+        content: currentFile.value.content,
+      });
+      showMessage('File saved');
+    } catch (e: any) {
+      showMessage(e.toString(), 'error');
+    }
+  }
+
+  async function createFile(fileName: string, content: string) {
+    if (!workspacePath.value) return;
+    try {
+      const path = await invoke<string>('create_markdown_file', {
+        folderPath: workspacePath.value,
+        fileName,
+        content,
+      });
+      await openFolder(workspacePath.value);
+      await openFile(path);
+      showMessage('File created');
+    } catch (e: any) {
+      showMessage(e.toString(), 'error');
+    }
+  }
+
+  const isProject = ref(false);
+
+  async function buildAndExport(format: string, outputPath?: string) {
+    if (!workspacePath.value) return;
+    
+    const settingsStore = useSettingsStore();
+    let progressInterval: ReturnType<typeof setInterval> | null = null;
+    isLoading.value = true;
+    buildProgress.value = 0;
+    buildLog.value = [];
+    isBuildDialogOpen.value = true;
+    try {
+      // For project workspaces, default output to dist/ inside the project
+      if (!outputPath && isProject.value) {
+        outputPath = workspacePath.value.replace(/[\\/]+$/, '') + '/dist';
+      }
+
+      // Use a temp dir for the intermediate mkdocs build
+      const buildOutputDir = workspacePath.value + '_build';
+      try {
+        await invoke('remove_dir', { path: buildOutputDir });
+      } catch {
+        // Ignore cleanup issues before a fresh build starts
+      }
+
+      const processor = (settingsStore.current.processor || projectProcessor.value || 'mkdocs') as 'mkdocs' | 'mdbook';
+      const sourceFolder = getBuildSourceFolder(processor);
+      const buildCommand = processor === 'mdbook' ? 'build_site_mdbook' : 'build_site';
+      const processorName = processor === 'mdbook' ? 'mdBook' : 'MkDocs';
+      buildLog.value.push(`Starting ${processorName} build...`);
+      if (sourceFolder !== workspacePath.value) {
+        buildLog.value.push(`Using ${sourceFolder.replace(/\\/g, '/')} as source for ${processorName}.`);
+      }
+      buildProgress.value = 5;
+
+      // Slow logarithmic progress simulation during mkdocs build
+      let tick = 0;
+      progressInterval = setInterval(() => {
+        tick++;
+        // Logarithmic curve: fast start, slow finish. Caps at ~70%
+        const target = Math.min(70, 15 * Math.log(tick + 1));
+        if (buildProgress.value < target) {
+          buildProgress.value = Math.round(target);
+        }
+        // Add periodic log entries
+        if (tick === 3) buildLog.value.push('Processing content files...');
+        if (tick === 8) buildLog.value.push('Generating navigation...');
+        if (tick === 14) buildLog.value.push('Building search index...');
+        if (tick === 20) buildLog.value.push('Rendering pages...');
+      }, 500);
+
+      buildOutput.value = await invoke<BuildResult>(buildCommand, {
+        sourceFolder,
+        outputFolder: buildOutputDir,
+      });
+
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
+
+      if (!buildOutput.value.success) {
+        buildProgress.value = 100;
+        const errors = buildOutput.value.stderr || 'Unknown error';
+        buildLog.value.push(`Build failed: ${errors}`);
+        showMessage('Build failed: ' + errors, 'error');
+        // Clean up intermediate build dir on failure
+        try { await invoke('remove_dir', { path: buildOutputDir }); } catch {}
+        return;
+      }
+
+      buildProgress.value = 75;
+      buildLog.value.push('Build complete. Exporting...');
+
+      // Export step
+      try {
+        if (format === 'folder' && outputPath) {
+          try {
+            await invoke('remove_dir', { path: outputPath });
+            buildLog.value.push('Removed previous export output.');
+          } catch {
+            // Ignore when output folder does not exist yet.
+          }
+        }
+
+        const exportSource = buildOutput.value.output_path || buildOutputDir;
+        const result = await invoke<string>('export_site', {
+          sourcePath: exportSource,
+          outputFormat: format,
+          outputPath: outputPath || null,
+        });
+        buildProgress.value = 100;
+        buildLog.value.push(`Exported to: ${result}`);
+        showMessage('Build & export complete');
+      } catch (e: any) {
+        buildProgress.value = 100;
+        buildLog.value.push(`Export failed: ${e}`);
+        showMessage(e.toString(), 'error');
+      }
+
+      // Clean up intermediate _site build directory
+      try { await invoke('remove_dir', { path: buildOutputDir }); } catch {}
+    } catch (e: any) {
+      buildProgress.value = 100;
+      buildLog.value.push(`Error: ${e}`);
+      showMessage(e.toString(), 'error');
+    } finally {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+      isLoading.value = false;
+    }
+  }
+
+  function closeWorkspace() {
+    workspacePath.value = null;
+    files.value = [];
+    fileTree.value = null;
+    currentFile.value = null;
+    buildOutput.value = null;
+    undoStack.value = [];
+    projectProcessor.value = null;
+  }
+
+  function pushUndo() {
+    if (currentFile.value) {
+      undoStack.value.push({
+        path: currentFile.value.path,
+        content: currentFile.value.content,
+      });
+      // Cap at 50 entries
+      if (undoStack.value.length > 50) {
+        undoStack.value.shift();
+      }
+    }
+  }
+
+  function undo() {
+    if (undoStack.value.length === 0 || !currentFile.value) return;
+    const last = undoStack.value.pop()!;
+    if (last.path === currentFile.value.path) {
+      currentFile.value.content = last.content;
+    }
+  }
+
+  const canUndo = computed(() => {
+    return undoStack.value.length > 0 && currentFile.value !== null;
+  });
+
+  return {
+    workspacePath,
+    files,
+    fileTree,
+    currentFile,
+    isLoading,
+    buildProgress,
+    buildOutput,
+    buildLog,
+    isBuildDialogOpen,
+    isProject,
+    sideNavOpen,
+    aiPanelOpen,
+    snackbar,
+    undoStack,
+    hasWorkspace,
+    canUndo,
+    projectProcessor,
+    showMessage,
+    detectProject,
+    openFolder,
+    openFile,
+    saveCurrentFile,
+    createFile,
+    buildAndExport,
+    closeWorkspace,
+    pushUndo,
+    undo,
+  };
+});
