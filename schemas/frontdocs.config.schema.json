@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/bagault/frontdocs/schemas/frontdocs.config.schema.json",
+  "title": "FrontdocsConfig",
+  "type": "object",
+  "required": ["schemaVersion", "siteName", "publishField"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "siteName": { "type": "string" },
+    "publishField": { "type": "string" },
+    "publishValues": { "type": "array", "items": { "type": "string" } },
+    "protocolTag": { "type": "string" },
+    "outputDir": { "type": "string", "default": "dist" },
+    "ignoredDirectories": { "type": "array", "items": { "type": "string" } },
+    "strict": { "type": "boolean", "default": false },
+    "theme": { "type": "string", "default": "material" },
+    "graph": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "navTitle": { "type": "string" }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "properties": {
+        "includeAllByDefault": { "type": "boolean" }
+      }
+    }
+  },
+  "additionalProperties": true
+}

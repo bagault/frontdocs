@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0.0",
+  "siteName": "Frontdocs Knowledge Base",
+  "publishField": "publish",
+  "publishValues": ["extern"],
+  "protocolTag": "#Protokoll",
+  "outputDir": "dist",
+  "ignoredDirectories": [".obsidian", ".git", "node_modules", "dist", ".venv"],
+  "strict": false,
+  "theme": "material",
+  "graph": {
+    "enabled": true,
+    "navTitle": "Graph"
+  },
+  "publish": {
+    "includeAllByDefault": true
+  }
+}

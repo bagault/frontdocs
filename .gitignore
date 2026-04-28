@@ -1,28 +1,6 @@
-# Dependencies
 node_modules/
-
-# Build outputs
 dist/
-src-tauri/target/
-
-# mkdocs sidecar binaries (built per-platform via PyInstaller)
-src-tauri/binaries/mkdocs-*
-
-# PyInstaller build artifacts
-.mkdocs-venv/
-.pyinstaller-work/
-
-# Environment
-.env
-.env.*
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
+*.log
+.venv/
 .DS_Store
-Thumbs.db
+AI/TEST/dist/
