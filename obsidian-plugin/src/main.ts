@@ -231,7 +231,7 @@ export default class FrontdocsPlugin extends Plugin {
     const tryNode = (cmd: string): boolean => {
       try {
         const r = spawnSync(cmd, ['-e', 'process.stdout.write(process.versions.node||"")'], { encoding: 'utf8', timeout: 5000 });
-        return r.status === 0 && /^\d+\.\d+\.\d+/.test(r.stdout.trim());
+        return r.status === 0 && /^\d+\.\d+\.\d+/.test((r.stdout || '').trim());
       } catch { return false; }
     };
 
@@ -470,10 +470,12 @@ class FrontdocsView extends ItemView {
     const v = this.plugin.vaultPath();
     const cli = this.plugin.cliBundlePath();
     const cliOk = existsSync(cli);
+    const node = this.plugin.resolveNode(pathWithCommonBins(process.env.PATH ?? ''));
+    const rt = node ? `${node.kind} (${node.cmd})` : 'NONE — install Node.js (>=20)';
     this.statusEl.setText(
       `vault: ${v || '(unset)'}\n` +
-      `cli:   ${cliOk ? cli : '(missing — reinstall plugin)'}\n` +
-      `runtime: Electron-as-Node (${process.execPath})`,
+      `cli:   ${cliOk ? cli : '(missing — will be extracted on next run)'}\n` +
+      `runtime: ${rt}`,
     );
   }
 
