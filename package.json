@@ -14,8 +14,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "node build.mjs && tsc",
+    "build": "node build.mjs && tsc && node build-cli.mjs",
     "build:viewer": "node build.mjs",
+    "build:cli": "node build-cli.mjs",
     "build:ts": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",

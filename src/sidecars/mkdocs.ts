@@ -21,6 +21,10 @@ const REQUIREMENTS = [
 ];
 
 function bundledBlobPath(): string | null {
+  // Caller-supplied path wins (Obsidian plugin sets this to its downloaded
+  // copy under <plugin>/bin/<os>-<arch>/frontdocs-mkdocs[.exe]).
+  const env = process.env['FRONTDOCS_MKDOCS_BLOB'];
+  if (env && existsSync(env)) return env;
   if (process.platform !== 'win32') return null;
   // dist/sidecars/mkdocs.js -> repo root/bin/win32-x64/frontdocs-mkdocs.exe
   const here = dirname(fileURLToPath(import.meta.url));

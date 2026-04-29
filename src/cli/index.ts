@@ -19,6 +19,10 @@ import type { FrontdocsConfig } from '../core/types.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function findViewerJs(): string {
+  // Allow callers (e.g. the Obsidian plugin) to point us at the viewer
+  // bundle without depending on the on-disk layout.
+  const env = process.env['FRONTDOCS_VIEWER_JS'];
+  if (env && existsSync(env)) return env;
   // dist/cli/index.js → dist/viewer/frontdocs-graph-viewer.js
   return resolve(__dirname, '..', 'viewer', 'frontdocs-graph-viewer.js');
 }

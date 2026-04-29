@@ -1,8 +1,10 @@
 // Frontdocs Obsidian plugin.
 //
-// All vault-modifying work lives in the Frontdocs CLI (separate Node project).
-// This plugin is a thin UI: it spawns `node <cliPath>` (or a configured binary)
-// with sub-commands and streams stdout/stderr back into a side panel.
+// Self-contained: the Frontdocs CLI is bundled into the plugin folder as
+// `assets/frontdocs-cli.mjs` and executed via Electron-as-Node
+// (process.execPath + ELECTRON_RUN_AS_NODE=1), so users do NOT need a Node.js
+// or npm installation. The only external dependency is the MkDocs blob, which
+// the plugin can download on demand from the Frontdocs GitHub release.
 
 import {
   App,
@@ -15,27 +17,29 @@ import {
   ButtonComponent,
   TextComponent,
 } from 'obsidian';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, isAbsolute, resolve } from 'node:path';
+import { mkdir, writeFile, unlink, stat, rename, chmod } from 'node:fs/promises';
+import { delimiter, join } from 'node:path';
+import { get as httpsGet } from 'node:https';
 
 export const FRONTDOCS_VIEW_TYPE = 'frontdocs-view';
+
+// Where to fetch the MkDocs blob from. Pinned to the v0.5.0 release.
+const BLOB_RELEASE_TAG = 'v0.5.0';
+const BLOB_BASE_URL = `https://github.com/bagault/frontdocs/releases/download/${BLOB_RELEASE_TAG}`;
 
 // --------------------------------------------------------------------------
 // Settings
 // --------------------------------------------------------------------------
 
 interface FrontdocsSettings {
-  cliPath: string;        // path to dist/cli/index.js   OR  a `frontdocs` binary
-  nodePath: string;       // optional explicit node executable
-  vaultOverride: string;  // optional alternate vault path; default = current vault root
+  vaultOverride: string;
   defaultMaxNotes: string;
   defaultConcurrency: string;
 }
 
 const DEFAULT_SETTINGS: FrontdocsSettings = {
-  cliPath: '',
-  nodePath: '',
   vaultOverride: '',
   defaultMaxNotes: '0',
   defaultConcurrency: '2',
@@ -47,6 +51,46 @@ const DEFAULT_SETTINGS: FrontdocsSettings = {
 
 export default class FrontdocsPlugin extends Plugin {
   settings: FrontdocsSettings = DEFAULT_SETTINGS;
+
+  /** Absolute path to <vault>/.obsidian/plugins/frontdocs/. */
+  pluginDir(): string {
+    const adapter = this.app.vault.adapter as unknown as { getBasePath?: () => string };
+    const base = adapter.getBasePath?.() ?? '';
+    return join(base, this.app.vault.configDir, 'plugins', this.manifest.id);
+  }
+
+  /** Path to the bundled CLI shipped in the plugin folder. */
+  cliBundlePath(): string {
+    return join(this.pluginDir(), 'assets', 'frontdocs-cli.mjs');
+  }
+
+  /** Path to the bundled viewer JS shipped in the plugin folder. */
+  viewerJsPath(): string {
+    return join(this.pluginDir(), 'assets', 'frontdocs-graph-viewer.js');
+  }
+
+  /** Local cache directory for downloaded MkDocs blobs. */
+  blobsDir(): string {
+    return join(this.pluginDir(), 'bin', `${process.platform}-${process.arch}`);
+  }
+
+  blobFilename(): string {
+    return process.platform === 'win32' ? 'frontdocs-mkdocs.exe' : 'frontdocs-mkdocs';
+  }
+
+  blobPath(): string {
+    return join(this.blobsDir(), this.blobFilename());
+  }
+
+  /** GitHub Release asset name for the current OS/arch. */
+  blobAssetName(): string {
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    return `frontdocs-mkdocs-${process.platform}-${process.arch}${ext}`;
+  }
+
+  blobAssetUrl(): string {
+    return `${BLOB_BASE_URL}/${this.blobAssetName()}`;
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -67,12 +111,7 @@ export default class FrontdocsPlugin extends Plugin {
     this.addCommand({
       id: 'frontdocs-summarize',
       name: 'AI: summarize notes',
-      callback: () =>
-        this.runWithPanel([
-          'ai',
-          'summarize',
-          ...this.summarizeArgs(),
-        ]),
+      callback: () => this.runWithPanel(['ai', 'summarize', ...this.summarizeArgs().slice(1)]),
     });
 
     this.addSettingTab(new FrontdocsSettingTab(this.app, this));
@@ -90,11 +129,8 @@ export default class FrontdocsPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  // -- helpers ------------------------------------------------------------
-
   vaultPath(): string {
     if (this.settings.vaultOverride.trim()) return this.settings.vaultOverride.trim();
-    // Obsidian's vault adapter exposes the absolute base path on desktop.
     const adapter = this.app.vault.adapter as unknown as { getBasePath?: () => string };
     return adapter.getBasePath?.() ?? '';
   }
@@ -109,15 +145,23 @@ export default class FrontdocsPlugin extends Plugin {
     return args;
   }
 
-  resolveCommand(): { cmd: string; args: string[] } | null {
-    const cli = this.settings.cliPath.trim();
-    if (!cli) return null;
-    if (!existsSync(cli)) return null;
-    if (cli.endsWith('.js')) {
-      const node = this.settings.nodePath.trim() || 'node';
-      return { cmd: node, args: [cli] };
+  /** Spawn a child process running the bundled CLI under Electron-as-Node. */
+  spawnCli(args: string[]): ChildProcess | null {
+    const cli = this.cliBundlePath();
+    if (!existsSync(cli)) {
+      new Notice('Frontdocs: bundled CLI is missing from the plugin folder');
+      return null;
     }
-    return { cmd: cli, args: [] };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      FRONTDOCS_VIEWER_JS: this.viewerJsPath(),
+      PATH: pathWithCommonBins(process.env.PATH ?? ''),
+    };
+    if (existsSync(this.blobPath())) {
+      env.FRONTDOCS_MKDOCS_BLOB = this.blobPath();
+    }
+    return spawn(process.execPath, [cli, ...args], { env });
   }
 
   async activateView(): Promise<FrontdocsView | null> {
@@ -133,7 +177,6 @@ export default class FrontdocsPlugin extends Plugin {
     return leaf.view as FrontdocsView;
   }
 
-  /** Run a Frontdocs command in the panel (opens it if needed). */
   async runWithPanel(extraArgs: string[]): Promise<void> {
     const view = await this.activateView();
     if (!view) {
@@ -142,33 +185,63 @@ export default class FrontdocsPlugin extends Plugin {
     }
     view.runCommand(extraArgs);
   }
-
-  /** Run a one-shot command capturing combined stdout/stderr; used by ping/status. */
-  runCapture(extraArgs: string[]): Promise<{ ok: boolean; output: string }> {
-    return new Promise((resolveP) => {
-      const cmd = this.resolveCommand();
-      if (!cmd) {
-        resolveP({ ok: false, output: 'Frontdocs CLI path is not configured. Open Settings → Frontdocs.' });
-        return;
-      }
-      const args = [...cmd.args, ...extraArgs];
-      const env = { ...process.env, PATH: pathWithCommonBins(process.env.PATH ?? '') };
-      let buf = '';
-      const child = spawn(cmd.cmd, args, { env });
-      child.stdout.on('data', (d) => { buf += d.toString(); });
-      child.stderr.on('data', (d) => { buf += d.toString(); });
-      child.on('error', (e) => resolveP({ ok: false, output: `spawn error: ${e.message}` }));
-      child.on('close', (code) => resolveP({ ok: code === 0, output: buf }));
-    });
-  }
 }
 
 function pathWithCommonBins(p: string): string {
-  // Help GUI launches find common toolchains (Homebrew, asdf, fnm).
   const extras = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin'];
   const parts = p.split(delimiter).filter(Boolean);
   for (const e of extras) if (!parts.includes(e)) parts.push(e);
   return parts.join(delimiter);
+}
+
+// --------------------------------------------------------------------------
+// Blob download
+// --------------------------------------------------------------------------
+
+function downloadFile(
+  url: string,
+  dest: string,
+  onProgress?: (received: number, total: number) => void,
+): Promise<number> {
+  return new Promise((resolveP, reject) => {
+    const tmp = dest + '.part';
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let total = 0;
+
+    const req = httpsGet(url, { headers: { 'user-agent': 'frontdocs-obsidian-plugin' } }, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        downloadFile(res.headers.location, dest, onProgress).then(resolveP, reject);
+        return;
+      }
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        res.resume();
+        return;
+      }
+      const len = res.headers['content-length'];
+      total = len ? Number(len) : 0;
+      res.on('data', (c: Buffer) => {
+        chunks.push(c);
+        received += c.length;
+        if (onProgress) onProgress(received, total);
+      });
+      res.on('end', async () => {
+        try {
+          await writeFile(tmp, Buffer.concat(chunks));
+          if (existsSync(dest)) await unlink(dest).catch(() => {});
+          await rename(tmp, dest);
+          if (process.platform !== 'win32') {
+            await chmod(dest, 0o755);
+          }
+          resolveP(received);
+        } catch (e) { reject(e); }
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -178,7 +251,8 @@ function pathWithCommonBins(p: string): string {
 class FrontdocsView extends ItemView {
   private logEl!: HTMLPreElement;
   private statusEl!: HTMLDivElement;
-  private currentChild: ChildProcessWithoutNullStreams | null = null;
+  private blobStatusEl!: HTMLSpanElement;
+  private currentChild: ChildProcess | null = null;
   private apiKeyInput!: TextComponent;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: FrontdocsPlugin) {
@@ -203,30 +277,49 @@ class FrontdocsView extends ItemView {
     this.statusEl = root.createDiv({ cls: 'frontdocs-status' });
     this.statusEl.style.fontSize = '0.85em';
     this.statusEl.style.opacity = '0.8';
+    this.statusEl.style.whiteSpace = 'pre-wrap';
     await this.refreshStatus();
 
-    // --- Build group ---
+    // --- MkDocs blob ---
+    const blobGroup = root.createDiv();
+    blobGroup.createEl('h4', { text: 'MkDocs blob' });
+    const blobInfo = blobGroup.createDiv();
+    blobInfo.style.fontSize = '0.85em';
+    blobInfo.style.marginBottom = '6px';
+    this.blobStatusEl = blobInfo.createSpan();
+    await this.refreshBlobStatus();
+
+    const blobBtns = blobGroup.createDiv();
+    blobBtns.style.display = 'flex';
+    blobBtns.style.gap = '6px';
+    blobBtns.style.flexWrap = 'wrap';
+    new ButtonComponent(blobBtns)
+      .setButtonText('download blob')
+      .setCta()
+      .onClick(() => this.downloadBlob(false));
+    new ButtonComponent(blobBtns)
+      .setButtonText('redownload')
+      .onClick(() => this.downloadBlob(true));
+
+    // --- Build ---
     const buildGroup = root.createDiv();
     buildGroup.createEl('h4', { text: 'Build' });
-    const buildBtns = buildGroup.createDiv({ cls: 'frontdocs-row' });
+    const buildBtns = buildGroup.createDiv();
     buildBtns.style.display = 'flex';
     buildBtns.style.gap = '6px';
     buildBtns.style.flexWrap = 'wrap';
-
     new ButtonComponent(buildBtns).setButtonText('analyze').onClick(() => this.runCommand(['analyze']));
     new ButtonComponent(buildBtns).setButtonText('export').onClick(() => this.runCommand(['export']));
     new ButtonComponent(buildBtns).setButtonText('build').setCta().onClick(() => this.runCommand(['build']));
     new ButtonComponent(buildBtns).setButtonText('verify').onClick(() => this.runCommand(['verify']));
 
-    // --- AI group ---
+    // --- AI ---
     const aiGroup = root.createDiv();
     aiGroup.createEl('h4', { text: 'AI' });
-
-    const aiBtns = aiGroup.createDiv({ cls: 'frontdocs-row' });
+    const aiBtns = aiGroup.createDiv();
     aiBtns.style.display = 'flex';
     aiBtns.style.gap = '6px';
     aiBtns.style.flexWrap = 'wrap';
-
     new ButtonComponent(aiBtns).setButtonText('status').onClick(() => this.runCommand(['ai', 'status']));
     new ButtonComponent(aiBtns).setButtonText('ping').onClick(() => this.runCommand(['ai', 'ping']));
     new ButtonComponent(aiBtns).setButtonText('summarize').setCta()
@@ -234,18 +327,15 @@ class FrontdocsView extends ItemView {
     new ButtonComponent(aiBtns).setButtonText('logout').setWarning()
       .onClick(() => this.runCommand(['ai', 'logout']));
 
-    // login row (custom provider): API key text field + button
-    const loginRow = aiGroup.createDiv({ cls: 'frontdocs-row' });
+    const loginRow = aiGroup.createDiv();
     loginRow.style.display = 'flex';
     loginRow.style.gap = '6px';
     loginRow.style.alignItems = 'center';
     loginRow.style.marginTop = '6px';
-
     this.apiKeyInput = new TextComponent(loginRow);
     this.apiKeyInput.setPlaceholder('API key for "custom" provider');
     this.apiKeyInput.inputEl.type = 'password';
     this.apiKeyInput.inputEl.style.flex = '1';
-
     new ButtonComponent(loginRow).setButtonText('login').onClick(() => this.doLogin());
 
     // --- Output ---
@@ -272,13 +362,28 @@ class FrontdocsView extends ItemView {
   }
 
   private async refreshStatus(): Promise<void> {
-    const cmd = this.plugin.resolveCommand();
     const v = this.plugin.vaultPath();
-    if (!cmd) {
-      this.statusEl.setText('CLI not configured. Settings → Frontdocs.');
-      return;
+    const cli = this.plugin.cliBundlePath();
+    const cliOk = existsSync(cli);
+    this.statusEl.setText(
+      `vault: ${v || '(unset)'}\n` +
+      `cli:   ${cliOk ? cli : '(missing — reinstall plugin)'}\n` +
+      `runtime: Electron-as-Node (${process.execPath})`,
+    );
+  }
+
+  private async refreshBlobStatus(): Promise<void> {
+    const p = this.plugin.blobPath();
+    const url = this.plugin.blobAssetUrl();
+    if (existsSync(p)) {
+      try {
+        const s = await stat(p);
+        const mb = (s.size / (1024 * 1024)).toFixed(1);
+        this.blobStatusEl.setText(`installed (${mb} MB) at ${p}`);
+      } catch { this.blobStatusEl.setText(`installed at ${p}`); }
+    } else {
+      this.blobStatusEl.setText(`not installed. Will download from ${url}`);
     }
-    this.statusEl.setText(`vault: ${v || '(unset)'}\ncli:   ${cmd.cmd} ${cmd.args.join(' ')}`);
   }
 
   private appendLine(s: string): void {
@@ -286,25 +391,51 @@ class FrontdocsView extends ItemView {
     this.logEl.scrollTop = this.logEl.scrollHeight;
   }
 
-  /** Spawn the CLI with [vault, ...extra]; the vault is auto-prepended for vault-scoped subcommands. */
-  runCommand(args: string[]): void {
-    if (this.currentChild) {
-      new Notice('Frontdocs: a command is already running');
-      return;
+  private async downloadBlob(force: boolean): Promise<void> {
+    if (this.currentChild) { new Notice('Frontdocs: a command is already running'); return; }
+    const dir = this.plugin.blobsDir();
+    const dest = this.plugin.blobPath();
+    const url = this.plugin.blobAssetUrl();
+    try {
+      await mkdir(dir, { recursive: true });
+      if (existsSync(dest)) {
+        if (!force) {
+          this.appendLine(`\nBlob already present at ${dest} — use "redownload" to replace.\n`);
+          return;
+        }
+        await unlink(dest);
+      }
+      this.appendLine(`\nDownloading ${url}\n  → ${dest}\n`);
+      let lastPct = -1;
+      const bytes = await downloadFile(url, dest, (recv, total) => {
+        if (!total) return;
+        const pct = Math.floor((recv / total) * 100);
+        if (pct !== lastPct && pct % 5 === 0) {
+          lastPct = pct;
+          this.appendLine(`  ${pct}% (${(recv / (1024 * 1024)).toFixed(1)} MB)\n`);
+        }
+      });
+      this.appendLine(`Downloaded ${(bytes / (1024 * 1024)).toFixed(1)} MB.\n`);
+      new Notice('Frontdocs: MkDocs blob installed');
+    } catch (e) {
+      const msg = (e as Error).message;
+      this.appendLine(`\n[error] download failed: ${msg}\n`);
+      new Notice(`Frontdocs: blob download failed — ${msg}`);
+    } finally {
+      await this.refreshBlobStatus();
     }
-    const cmd = this.plugin.resolveCommand();
-    if (!cmd) { new Notice('Frontdocs CLI not configured'); return; }
+  }
 
+  runCommand(args: string[]): void {
+    if (this.currentChild) { new Notice('Frontdocs: a command is already running'); return; }
     const v = this.plugin.vaultPath();
     const finalArgs = withVaultArg(args, v);
-    const env = { ...process.env, PATH: pathWithCommonBins(process.env.PATH ?? '') };
-
-    this.appendLine(`\n$ ${cmd.cmd} ${[...cmd.args, ...finalArgs].join(' ')}\n`);
-    const child = spawn(cmd.cmd, [...cmd.args, ...finalArgs], { env });
+    this.appendLine(`\n$ frontdocs ${finalArgs.join(' ')}\n`);
+    const child = this.plugin.spawnCli(finalArgs);
+    if (!child) return;
     this.currentChild = child;
-
-    child.stdout.on('data', (d) => this.appendLine(d.toString()));
-    child.stderr.on('data', (d) => this.appendLine(d.toString()));
+    child.stdout?.on('data', (d) => this.appendLine(d.toString()));
+    child.stderr?.on('data', (d) => this.appendLine(d.toString()));
     child.on('error', (e) => this.appendLine(`\n[error] ${e.message}\n`));
     child.on('close', (code) => {
       this.appendLine(`\n[exit ${code}]\n`);
@@ -322,35 +453,28 @@ class FrontdocsView extends ItemView {
 
   private async doLogin(): Promise<void> {
     if (this.currentChild) { new Notice('Frontdocs: a command is already running'); return; }
-    const cmd = this.plugin.resolveCommand();
-    if (!cmd) { new Notice('Frontdocs CLI not configured'); return; }
     const key = this.apiKeyInput.getValue();
     if (!key) { new Notice('Frontdocs: paste an API key first'); return; }
     const v = this.plugin.vaultPath();
     const finalArgs = ['ai', 'login', v];
-    const env = { ...process.env, PATH: pathWithCommonBins(process.env.PATH ?? '') };
-
-    this.appendLine(`\n$ echo *** | ${cmd.cmd} ${[...cmd.args, ...finalArgs].join(' ')}\n`);
-    const child = spawn(cmd.cmd, [...cmd.args, ...finalArgs], { env });
+    this.appendLine(`\n$ echo *** | frontdocs ${finalArgs.join(' ')}\n`);
+    const child = this.plugin.spawnCli(finalArgs);
+    if (!child) return;
     this.currentChild = child;
-    child.stdout.on('data', (d) => this.appendLine(d.toString()));
-    child.stderr.on('data', (d) => this.appendLine(d.toString()));
+    child.stdout?.on('data', (d) => this.appendLine(d.toString()));
+    child.stderr?.on('data', (d) => this.appendLine(d.toString()));
     child.on('error', (e) => this.appendLine(`\n[error] ${e.message}\n`));
     child.on('close', (code) => {
       this.appendLine(`\n[exit ${code}]\n`);
       this.currentChild = null;
       this.apiKeyInput.setValue('');
     });
-    child.stdin.write(key + '\n');
-    child.stdin.end();
+    child.stdin?.write(key + '\n');
+    child.stdin?.end();
   }
 }
 
 function withVaultArg(args: string[], vault: string): string[] {
-  // Subcommands that take <vault> as a positional argument.
-  // - top-level: analyze | export | build | verify (vault is argv[1])
-  // - ai:       status [vault] | login <vault> | logout <vault> | ping <vault> | summarize <vault> [...]
-  // We always inject the vault path right after the subcommand identifier.
   if (args.length === 0) return args;
   const head = args[0];
   if (head === 'ai') {
@@ -359,8 +483,9 @@ function withVaultArg(args: string[], vault: string): string[] {
     const rest = args.slice(2);
     return ['ai', sub, vault, ...rest];
   }
-  // Top-level command. If the user already passed a vault path, leave it.
-  if (args.length >= 2 && (isAbsolute(args[1]) || args[1].startsWith('.'))) return args;
+  if (args.length >= 2 && (args[1].startsWith('/') || args[1].startsWith('.') || /^[A-Za-z]:[\\/]/.test(args[1]))) {
+    return args;
+  }
   return [head, vault, ...args.slice(1)];
 }
 
@@ -377,27 +502,10 @@ class FrontdocsSettingTab extends PluginSettingTab {
     containerEl.createEl('h2', { text: 'Frontdocs' });
     containerEl.createEl('p', {
       text:
-        'Frontdocs is a separate Node CLI. Point this plugin at the bundled entry script ' +
-        '(dist/cli/index.js) or at a binary on your PATH.',
+        'The Frontdocs CLI is bundled into this plugin and runs via the Electron ' +
+        'runtime that Obsidian already ships. The only external artifact is the ' +
+        'MkDocs blob, which can be downloaded from the Frontdocs panel.',
     });
-
-    new Setting(containerEl)
-      .setName('CLI path')
-      .setDesc('Absolute path to dist/cli/index.js or to a frontdocs executable.')
-      .addText((t) =>
-        t.setPlaceholder('/path/to/frontdocs/dist/cli/index.js')
-          .setValue(this.plugin.settings.cliPath)
-          .onChange(async (v) => { this.plugin.settings.cliPath = v.trim(); await this.plugin.saveSettings(); }),
-      );
-
-    new Setting(containerEl)
-      .setName('Node executable')
-      .setDesc('Optional. Defaults to "node" on PATH; only needed when CLI path ends with .js and node is not on PATH for GUI launches.')
-      .addText((t) =>
-        t.setPlaceholder('node')
-          .setValue(this.plugin.settings.nodePath)
-          .onChange(async (v) => { this.plugin.settings.nodePath = v.trim(); await this.plugin.saveSettings(); }),
-      );
 
     new Setting(containerEl)
       .setName('Vault override')
@@ -431,5 +539,3 @@ class FrontdocsSettingTab extends PluginSettingTab {
     });
   }
 }
-
-void resolve; // silence unused-import lint; kept for future path joining
