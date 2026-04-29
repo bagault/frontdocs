@@ -37,12 +37,17 @@ interface FrontdocsSettings {
   vaultOverride: string;
   defaultMaxNotes: string;
   defaultConcurrency: string;
+  /** Optional override: absolute path to a Node executable to use instead of
+   *  Obsidian's bundled Electron-as-Node. Useful as a workaround if
+   *  ELECTRON_RUN_AS_NODE behaves badly on a particular platform. */
+  nodeOverride: string;
 }
 
 const DEFAULT_SETTINGS: FrontdocsSettings = {
   vaultOverride: '',
   defaultMaxNotes: '0',
   defaultConcurrency: '2',
+  nodeOverride: '',
 };
 
 // --------------------------------------------------------------------------
@@ -145,23 +150,46 @@ export default class FrontdocsPlugin extends Plugin {
     return args;
   }
 
-  /** Spawn a child process running the bundled CLI under Electron-as-Node. */
-  spawnCli(args: string[]): ChildProcess | null {
+  /** Spawn a child process running the bundled CLI under Electron-as-Node
+   *  (or a user-configured Node binary). Returns the spawn descriptor and the
+   *  exact command line so callers can show it in the panel log. */
+  spawnCli(args: string[]): { child: ChildProcess; display: string } | null {
     const cli = this.cliBundlePath();
     if (!existsSync(cli)) {
-      new Notice('Frontdocs: bundled CLI is missing from the plugin folder');
+      new Notice(`Frontdocs: bundled CLI not found at ${cli}. Reinstall the plugin from the v0.5.0 release zip.`);
       return null;
     }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
       FRONTDOCS_VIEWER_JS: this.viewerJsPath(),
       PATH: pathWithCommonBins(process.env.PATH ?? ''),
     };
     if (existsSync(this.blobPath())) {
       env.FRONTDOCS_MKDOCS_BLOB = this.blobPath();
     }
-    return spawn(process.execPath, [cli, ...args], { env });
+
+    let cmd: string;
+    let cmdArgs: string[];
+    const override = this.settings.nodeOverride.trim();
+    if (override) {
+      cmd = override;
+      cmdArgs = [cli, ...args];
+    } else {
+      // Use Obsidian's bundled Electron as a Node runtime. This is the
+      // documented Electron mechanism and works on Windows / macOS / Linux.
+      cmd = process.execPath;
+      cmdArgs = [cli, ...args];
+      env.ELECTRON_RUN_AS_NODE = '1';
+    }
+
+    const display = `${cmd} ${cmdArgs.join(' ')}`;
+    try {
+      const child = spawn(cmd, cmdArgs, { env, cwd: this.vaultPath() || undefined });
+      return { child, display };
+    } catch (e) {
+      new Notice(`Frontdocs: spawn failed — ${(e as Error).message}`);
+      return null;
+    }
   }
 
   async activateView(): Promise<FrontdocsView | null> {
@@ -430,14 +458,14 @@ class FrontdocsView extends ItemView {
     if (this.currentChild) { new Notice('Frontdocs: a command is already running'); return; }
     const v = this.plugin.vaultPath();
     const finalArgs = withVaultArg(args, v);
-    this.appendLine(`\n$ frontdocs ${finalArgs.join(' ')}\n`);
-    const child = this.plugin.spawnCli(finalArgs);
-    if (!child) return;
-    this.currentChild = child;
-    child.stdout?.on('data', (d) => this.appendLine(d.toString()));
-    child.stderr?.on('data', (d) => this.appendLine(d.toString()));
-    child.on('error', (e) => this.appendLine(`\n[error] ${e.message}\n`));
-    child.on('close', (code) => {
+    const spawned = this.plugin.spawnCli(finalArgs);
+    if (!spawned) return;
+    this.appendLine(`\n$ ${spawned.display}\n`);
+    this.currentChild = spawned.child;
+    spawned.child.stdout?.on('data', (d) => this.appendLine(d.toString()));
+    spawned.child.stderr?.on('data', (d) => this.appendLine(d.toString()));
+    spawned.child.on('error', (e) => this.appendLine(`\n[error] ${e.message}\n`));
+    spawned.child.on('close', (code) => {
       this.appendLine(`\n[exit ${code}]\n`);
       this.currentChild = null;
     });
@@ -457,20 +485,20 @@ class FrontdocsView extends ItemView {
     if (!key) { new Notice('Frontdocs: paste an API key first'); return; }
     const v = this.plugin.vaultPath();
     const finalArgs = ['ai', 'login', v];
-    this.appendLine(`\n$ echo *** | frontdocs ${finalArgs.join(' ')}\n`);
-    const child = this.plugin.spawnCli(finalArgs);
-    if (!child) return;
-    this.currentChild = child;
-    child.stdout?.on('data', (d) => this.appendLine(d.toString()));
-    child.stderr?.on('data', (d) => this.appendLine(d.toString()));
-    child.on('error', (e) => this.appendLine(`\n[error] ${e.message}\n`));
-    child.on('close', (code) => {
+    const spawned = this.plugin.spawnCli(finalArgs);
+    if (!spawned) return;
+    this.appendLine(`\n$ echo *** | ${spawned.display}\n`);
+    this.currentChild = spawned.child;
+    spawned.child.stdout?.on('data', (d) => this.appendLine(d.toString()));
+    spawned.child.stderr?.on('data', (d) => this.appendLine(d.toString()));
+    spawned.child.on('error', (e) => this.appendLine(`\n[error] ${e.message}\n`));
+    spawned.child.on('close', (code) => {
       this.appendLine(`\n[exit ${code}]\n`);
       this.currentChild = null;
       this.apiKeyInput.setValue('');
     });
-    child.stdin?.write(key + '\n');
-    child.stdin?.end();
+    spawned.child.stdin?.write(key + '\n');
+    spawned.child.stdin?.end();
   }
 }
 
@@ -514,6 +542,19 @@ class FrontdocsSettingTab extends PluginSettingTab {
         t.setPlaceholder(this.plugin.vaultPath() || '/path/to/vault')
           .setValue(this.plugin.settings.vaultOverride)
           .onChange(async (v) => { this.plugin.settings.vaultOverride = v.trim(); await this.plugin.saveSettings(); }),
+      );
+
+    new Setting(containerEl)
+      .setName('Node executable override')
+      .setDesc(
+        'Optional. Absolute path to a Node.js binary to run the bundled CLI. ' +
+        'Leave empty to use Obsidian\u2019s built-in Electron runtime ' +
+        '(ELECTRON_RUN_AS_NODE), which is the default and needs no extra install.',
+      )
+      .addText((t) =>
+        t.setPlaceholder('e.g. C:\\Program Files\\nodejs\\node.exe or /usr/local/bin/node')
+          .setValue(this.plugin.settings.nodeOverride)
+          .onChange(async (v) => { this.plugin.settings.nodeOverride = v.trim(); await this.plugin.saveSettings(); }),
       );
 
     containerEl.createEl('h3', { text: 'AI defaults' });
