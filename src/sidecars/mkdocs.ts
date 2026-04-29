@@ -1,8 +1,11 @@
-// MkDocs sidecar runner. Bootstraps a per-vault Python venv with a pinned plugin set,
-// then invokes `mkdocs build`. PyInstaller blob shipping is deferred (see AGENT.md).
+// MkDocs sidecar runner. On Windows, prefers a bundled PyInstaller blob
+// (bin/win32-x64/frontdocs-mkdocs.exe) so end users don't need Python.
+// On other platforms (or when the blob is absent), bootstraps a per-vault
+// Python venv with a pinned plugin set, then invokes `mkdocs build`.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 
 export interface SidecarOptions {
@@ -16,6 +19,18 @@ const REQUIREMENTS = [
   'mkdocs-material>=9.5,<10',
   'pymdown-extensions>=10,<11',
 ];
+
+function bundledBlobPath(): string | null {
+  if (process.platform !== 'win32') return null;
+  // dist/sidecars/mkdocs.js -> repo root/bin/win32-x64/frontdocs-mkdocs.exe
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, '..', '..', 'bin', 'win32-x64', 'frontdocs-mkdocs.exe'),
+    resolve(here, '..', '..', '..', 'bin', 'win32-x64', 'frontdocs-mkdocs.exe'),
+  ];
+  for (const p of candidates) if (existsSync(p)) return p;
+  return null;
+}
 
 export async function ensureVenv(outDir: string): Promise<{ venvDir: string; python: string; mkdocs: string }> {
   const venvDir = join(outDir, '.frontdocs', 'venv');
@@ -42,9 +57,14 @@ export async function ensureVenv(outDir: string): Promise<{ venvDir: string; pyt
 }
 
 export async function buildWithMkdocs(opts: SidecarOptions): Promise<void> {
-  const { mkdocs } = await ensureVenv(opts.outDir);
   const args = ['build'];
   if (opts.strict) args.push('--strict');
+  const blob = bundledBlobPath();
+  if (blob) {
+    await run(blob, args, { cwd: opts.outDir, stdio: 'inherit' });
+    return;
+  }
+  const { mkdocs } = await ensureVenv(opts.outDir);
   await run(mkdocs, args, { cwd: opts.outDir, stdio: 'inherit' });
 }
 

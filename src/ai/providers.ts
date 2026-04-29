@@ -86,7 +86,8 @@ async function chatCustom(cfg: AIProviderConfig, messages: ChatMessage[]): Promi
 
 export async function ping(cfg: AIProviderConfig): Promise<{ ok: boolean; detail: string }> {
   try {
-    const r = await chat({ ...cfg, maxTokens: 8 }, [
+    // Larger timeout than default chat: cold model loads (multi-GB) can take >2 min on first call.
+    const r = await chat({ ...cfg, maxTokens: 8, timeoutMs: cfg.timeoutMs ?? 300_000 }, [
       { role: 'system', content: 'Reply with exactly the word "pong".' },
       { role: 'user', content: 'ping' },
     ]);

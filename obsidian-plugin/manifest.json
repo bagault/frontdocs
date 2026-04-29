@@ -1,0 +1,10 @@
+{
+  "id": "frontdocs",
+  "name": "Frontdocs",
+  "version": "0.5.0",
+  "minAppVersion": "1.5.0",
+  "description": "Publish the current vault as a MkDocs Material site with an interactive Cosmos.gl graph and optional AI summaries (Ollama or OpenAI-compatible).",
+  "author": "bagault",
+  "authorUrl": "https://github.com/bagault/frontdocs",
+  "isDesktopOnly": true
+}

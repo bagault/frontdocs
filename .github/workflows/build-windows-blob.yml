@@ -4,12 +4,14 @@ name: build-windows-blob
 # users on Windows do not need to install Python. Run on a Windows runner because
 # PyInstaller does not cross-compile from Linux/macOS.
 #
-# Trigger: manual dispatch, or any push of a tag matching v*.
+# Trigger: manual dispatch only. The committed binary under bin/win32-x64/
+# is treated as the source of truth; rebuild with `gh workflow run` when the
+# pinned MkDocs / Material / pymdown-extensions versions change.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+
+permissions:
+  contents: read
 
 jobs:
   build-windows-x64:
@@ -66,9 +68,3 @@ jobs:
           name: frontdocs-mkdocs-windows-x64
           path: dist/frontdocs-mkdocs.exe
           if-no-files-found: error
-
-      - name: Attach to release (tag pushes only)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/frontdocs-mkdocs.exe
