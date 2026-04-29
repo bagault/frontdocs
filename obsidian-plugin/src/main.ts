@@ -16,10 +16,12 @@ import {
   WorkspaceLeaf,
   ButtonComponent,
   TextComponent,
+  DropdownComponent,
+  requestUrl,
 } from 'obsidian';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, unlink, stat, rename, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, unlink, stat, rename, chmod, readFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { get as httpsGet } from 'node:https';
 
@@ -103,6 +105,42 @@ export default class FrontdocsPlugin extends Plugin {
 
   blobAssetUrl(): string {
     return `${BLOB_BASE_URL}/${this.blobAssetName()}`;
+  }
+
+  /** Path to the vault's frontdocs.config.json (created on demand). */
+  vaultConfigPath(): string {
+    return join(this.vaultPath() || this.pluginDir(), 'frontdocs.config.json');
+  }
+
+  /** Read the vault config (or {} if it doesn't exist / is malformed). */
+  async readVaultConfig(): Promise<Record<string, unknown>> {
+    const p = this.vaultConfigPath();
+    if (!existsSync(p)) return {};
+    try { return JSON.parse(await readFile(p, 'utf8')); } catch { return {}; }
+  }
+
+  /** Merge a patch into the vault config's `ai` section and write it back. */
+  async writeVaultAiConfig(patch: { provider?: string; endpoint?: string; model?: string }): Promise<void> {
+    const cfg = await this.readVaultConfig();
+    const ai = (cfg.ai && typeof cfg.ai === 'object') ? cfg.ai as Record<string, unknown> : {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue;
+      if (v === '') delete ai[k]; else ai[k] = v;
+    }
+    if (!('enabled' in ai)) ai.enabled = true;
+    cfg.ai = ai;
+    if (!('schemaVersion' in cfg)) cfg.schemaVersion = '1.0.0';
+    if (!('siteName' in cfg)) cfg.siteName = 'Frontdocs Knowledge Base';
+    if (!('publishField' in cfg)) cfg.publishField = 'publish';
+    await writeFile(this.vaultConfigPath(), JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  }
+
+  /** Fetch the list of locally installed Ollama models from /api/tags. */
+  async listOllamaModels(endpoint: string): Promise<string[]> {
+    const url = endpoint.replace(/\/$/, '') + '/api/tags';
+    const r = await requestUrl({ url, method: 'GET' });
+    const j = r.json as { models?: { name?: string }[] };
+    return (j.models ?? []).map((m) => m.name).filter((n): n is string => !!n).sort();
   }
 
   async onload(): Promise<void> {
@@ -652,10 +690,134 @@ class FrontdocsSettingTab extends PluginSettingTab {
           .onChange(async (v) => { this.plugin.settings.defaultConcurrency = v.trim(); await this.plugin.saveSettings(); }),
       );
 
+    containerEl.createEl('h3', { text: 'AI provider' });
     containerEl.createEl('p', {
       text:
-        'Provider, endpoint and model are configured in <vault>/frontdocs.config.json under "ai". ' +
-        'API keys for the "custom" provider are stored in your OS keychain by the CLI.',
+        'Provider, endpoint and model are written to <vault>/frontdocs.config.json under "ai". ' +
+        'API keys for the "custom" provider are stored in your OS keychain via the "login" button in the Frontdocs panel.',
     });
+    containerEl.createEl('p', {
+      text: 'Loading current values from ' + this.plugin.vaultConfigPath() + ' …',
+      cls: 'frontdocs-ai-config-status',
+    }).style.fontSize = '0.8em';
+
+    void this.renderAiSection(containerEl);
+  }
+
+  private async renderAiSection(containerEl: HTMLElement): Promise<void> {
+    const cfg = await this.plugin.readVaultConfig();
+    const ai = (cfg.ai && typeof cfg.ai === 'object' ? cfg.ai : {}) as Record<string, string>;
+    const current = {
+      provider: (ai.provider as string) || 'ollama',
+      endpoint: (ai.endpoint as string) || (ai.provider === 'custom' ? 'https://api.openai.com' : 'http://localhost:11434'),
+      model: (ai.model as string) || '',
+    };
+
+    const status = containerEl.querySelector('.frontdocs-ai-config-status') as HTMLElement | null;
+    status?.setText('Stored in: ' + this.plugin.vaultConfigPath());
+
+    let modelDropdown: DropdownComponent | null = null;
+    let modelText: TextComponent | null = null;
+    let providerDropdown: DropdownComponent | null = null;
+    let endpointText: TextComponent | null = null;
+
+    const save = async (): Promise<void> => {
+      try {
+        await this.plugin.writeVaultAiConfig({
+          provider: providerDropdown?.getValue(),
+          endpoint: endpointText?.getValue().trim(),
+          model: (modelDropdown?.getValue() ?? modelText?.getValue() ?? '').trim(),
+        });
+      } catch (e) {
+        new Notice(`Frontdocs: failed to write config — ${(e as Error).message}`);
+      }
+    };
+
+    new Setting(containerEl)
+      .setName('Provider')
+      .setDesc('"ollama" talks to a local Ollama server. "custom" is an OpenAI-compatible HTTP endpoint that requires an API key.')
+      .addDropdown((d) => {
+        providerDropdown = d;
+        d.addOption('ollama', 'ollama (local)');
+        d.addOption('custom', 'custom (OpenAI-compatible)');
+        d.setValue(current.provider);
+        d.onChange(async (v) => {
+          current.provider = v;
+          // Suggest a sensible default endpoint when switching
+          if (v === 'custom' && /localhost:11434/.test(endpointText?.getValue() ?? '')) {
+            endpointText?.setValue('https://api.openai.com');
+          } else if (v === 'ollama' && !/localhost:11434/.test(endpointText?.getValue() ?? '')) {
+            endpointText?.setValue('http://localhost:11434');
+          }
+          await save();
+          await refreshModels();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName('Endpoint URL')
+      .setDesc('Base URL of the LLM provider. Examples: http://localhost:11434 (Ollama), https://api.openai.com, https://api.groq.com/openai, https://openrouter.ai/api.')
+      .addText((t) => {
+        endpointText = t;
+        t.setPlaceholder('http://localhost:11434');
+        t.setValue(current.endpoint);
+        t.inputEl.style.width = '100%';
+        t.onChange(async () => { await save(); });
+      });
+
+    const modelSetting = new Setting(containerEl)
+      .setName('Model')
+      .setDesc('For Ollama, click "refresh" to populate from your local server. For custom, type any model name your provider accepts (e.g. gpt-4o-mini, llama-3.1-70b-versatile).');
+
+    modelSetting.addDropdown((d) => {
+      modelDropdown = d;
+      d.selectEl.style.minWidth = '12em';
+      d.onChange(async () => { await save(); });
+    });
+    modelSetting.addText((t) => {
+      modelText = t;
+      t.setPlaceholder('gpt-4o-mini');
+      t.setValue(current.model);
+      t.onChange(async () => { await save(); });
+    });
+    modelSetting.addButton((b) => {
+      b.setButtonText('refresh').setTooltip('Fetch installed models from the Ollama endpoint').onClick(async () => {
+        await refreshModels(true);
+      });
+    });
+
+    const refreshModels = async (notify = false): Promise<void> => {
+      if (!modelDropdown || !modelText || !providerDropdown || !endpointText) return;
+      const provider = providerDropdown.getValue();
+      const dropdownEl = modelDropdown.selectEl;
+      const textEl = modelText.inputEl;
+      if (provider === 'ollama') {
+        textEl.style.display = 'none';
+        dropdownEl.style.display = '';
+        // Clear existing options
+        while (dropdownEl.options.length) dropdownEl.remove(0);
+        try {
+          const models = await this.plugin.listOllamaModels(endpointText.getValue());
+          if (models.length === 0) {
+            modelDropdown.addOption('', '(no models — run `ollama pull <name>`)');
+          } else {
+            for (const m of models) modelDropdown.addOption(m, m);
+            const want = current.model || models[0];
+            modelDropdown.setValue(models.includes(want) ? want : models[0]);
+            current.model = modelDropdown.getValue();
+            await save();
+          }
+          if (notify) new Notice(`Frontdocs: found ${models.length} Ollama model(s)`);
+        } catch (e) {
+          modelDropdown.addOption('', '(failed to query Ollama)');
+          if (notify) new Notice(`Frontdocs: cannot reach Ollama at ${endpointText.getValue()} — ${(e as Error).message}`, 8000);
+        }
+      } else {
+        dropdownEl.style.display = 'none';
+        textEl.style.display = '';
+      }
+    };
+
+    await refreshModels(false);
   }
 }
