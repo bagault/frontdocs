@@ -23,6 +23,14 @@ import { mkdir, writeFile, unlink, stat, rename, chmod } from 'node:fs/promises'
 import { delimiter, join } from 'node:path';
 import { get as httpsGet } from 'node:https';
 
+// Embedded assets (base64-encoded by esbuild's loader). They are unpacked into
+// the plugin folder on first load so the plugin is fully self-contained —
+// users only need to ship manifest.json + main.js.
+// @ts-expect-error — base64 string injected at build time
+import CLI_BUNDLE_BASE64 from '../assets/frontdocs-cli.mjs';
+// @ts-expect-error — base64 string injected at build time
+import VIEWER_BUNDLE_BASE64 from '../assets/frontdocs-graph-viewer.embed.js';
+
 export const FRONTDOCS_VIEW_TYPE = 'frontdocs-view';
 
 // Where to fetch the MkDocs blob from. Pinned to the v0.5.0 release.
@@ -99,6 +107,7 @@ export default class FrontdocsPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    await this.ensureAssetsExtracted();
 
     this.registerView(FRONTDOCS_VIEW_TYPE, (leaf) => new FrontdocsView(leaf, this));
 
@@ -134,6 +143,24 @@ export default class FrontdocsPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
+  /** Unpack embedded CLI + viewer into <plugin>/assets/ on first run. */
+  async ensureAssetsExtracted(): Promise<void> {
+    const assetsDir = join(this.pluginDir(), 'assets');
+    await mkdir(assetsDir, { recursive: true });
+    const targets: { path: string; data: string }[] = [
+      { path: this.cliBundlePath(), data: CLI_BUNDLE_BASE64 as unknown as string },
+      { path: this.viewerJsPath(), data: VIEWER_BUNDLE_BASE64 as unknown as string },
+    ];
+    for (const t of targets) {
+      if (existsSync(t.path)) continue;
+      try {
+        await writeFile(t.path, Buffer.from(t.data, 'base64'));
+      } catch (e) {
+        console.error(`Frontdocs: failed to extract embedded asset to ${t.path}: ${(e as Error).message}`);
+      }
+    }
+  }
+
   vaultPath(): string {
     if (this.settings.vaultOverride.trim()) return this.settings.vaultOverride.trim();
     const adapter = this.app.vault.adapter as unknown as { getBasePath?: () => string };
@@ -156,8 +183,12 @@ export default class FrontdocsPlugin extends Plugin {
   spawnCli(args: string[]): { child: ChildProcess; display: string } | null {
     const cli = this.cliBundlePath();
     if (!existsSync(cli)) {
-      new Notice(`Frontdocs: bundled CLI not found at ${cli}. Reinstall the plugin from the v0.5.0 release zip.`);
-      return null;
+      // Last-ditch: try to extract again, then fail loudly with the real path.
+      this.ensureAssetsExtracted().catch(() => {});
+      if (!existsSync(cli)) {
+        new Notice(`Frontdocs: failed to extract bundled CLI to ${cli}. Check the plugin folder permissions.`);
+        return null;
+      }
     }
     const env: NodeJS.ProcessEnv = {
       ...process.env,

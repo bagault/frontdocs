@@ -6,23 +6,10 @@ filesystem and network work is done by the CLI itself.
 
 ## Install (manual / desktop only)
 
-1. Build the CLI in the parent repo:
-   ```bash
-   cd ..
-   npm install
-   npm run build
-   ```
-2. Build this plugin:
-   ```bash
-   npm install
-   npm run build
-   ```
-3. Copy `manifest.json` and `main.js` into your vault under
-   `<vault>/.obsidian/plugins/frontdocs/`. Then enable **Frontdocs** in
-   *Settings → Community plugins*.
-4. Open *Settings → Frontdocs* and set **CLI path** to the absolute path of
-   `dist/cli/index.js` from the parent repo (e.g.
-   `/home/you/code/frontdocs/dist/cli/index.js`).
+1. From the [v0.5.0 release](https://github.com/bagault/frontdocs/releases/tag/v0.5.0), download `manifest.json` and `main.js` (or grab `frontdocs-obsidian-0.5.0.zip` and extract its contents).
+2. Place them under `<vault>/.obsidian/plugins/frontdocs/`. The plugin self-extracts the bundled CLI + viewer into `assets/` on first load — no further files are needed.
+3. Enable **Frontdocs** in *Settings → Community plugins*.
+4. Open the **Frontdocs** side panel and click **download blob** in the *MkDocs blob* section to fetch the platform-appropriate MkDocs binary.
 
 ## Usage
 
