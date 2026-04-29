@@ -17,7 +17,7 @@ import {
   ButtonComponent,
   TextComponent,
 } from 'obsidian';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, unlink, stat, rename, chmod } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
@@ -177,13 +177,15 @@ export default class FrontdocsPlugin extends Plugin {
     return args;
   }
 
-  /** Spawn a child process running the bundled CLI under Electron-as-Node
-   *  (or a user-configured Node binary). Returns the spawn descriptor and the
-   *  exact command line so callers can show it in the panel log. */
+  /** Spawn a child process running the bundled CLI. Prefers a real `node`
+   *  binary (system PATH or user override) because some Obsidian builds
+   *  ship Electron with the `runAsNode` fuse disabled, which makes
+   *  ELECTRON_RUN_AS_NODE silently launch a second Obsidian instead of
+   *  Node. Falls back to Electron-as-Node only when it has been verified
+   *  to actually behave as Node. */
   spawnCli(args: string[]): { child: ChildProcess; display: string } | null {
     const cli = this.cliBundlePath();
     if (!existsSync(cli)) {
-      // Last-ditch: try to extract again, then fail loudly with the real path.
       this.ensureAssetsExtracted().catch(() => {});
       if (!existsSync(cli)) {
         new Notice(`Frontdocs: failed to extract bundled CLI to ${cli}. Check the plugin folder permissions.`);
@@ -199,17 +201,15 @@ export default class FrontdocsPlugin extends Plugin {
       env.FRONTDOCS_MKDOCS_BLOB = this.blobPath();
     }
 
-    let cmd: string;
-    let cmdArgs: string[];
-    const override = this.settings.nodeOverride.trim();
-    if (override) {
-      cmd = override;
-      cmdArgs = [cli, ...args];
-    } else {
-      // Use Obsidian's bundled Electron as a Node runtime. This is the
-      // documented Electron mechanism and works on Windows / macOS / Linux.
-      cmd = process.execPath;
-      cmdArgs = [cli, ...args];
+    const node = this.resolveNode(env.PATH ?? '');
+    if (!node) {
+      new Notice('Frontdocs: no usable Node.js runtime found. Install Node.js (>=20) or set "Node executable override" in Frontdocs settings.', 10000);
+      return null;
+    }
+
+    let cmd = node.cmd;
+    let cmdArgs = [cli, ...args];
+    if (node.kind === 'electron-as-node') {
       env.ELECTRON_RUN_AS_NODE = '1';
     }
 
@@ -221,6 +221,52 @@ export default class FrontdocsPlugin extends Plugin {
       new Notice(`Frontdocs: spawn failed — ${(e as Error).message}`);
       return null;
     }
+  }
+
+  /** Find a usable Node.js runtime. Returns null if nothing works. */
+  private _cachedNode: { cmd: string; kind: 'node' | 'electron-as-node' } | null | undefined;
+  resolveNode(pathEnv: string): { cmd: string; kind: 'node' | 'electron-as-node' } | null {
+    if (this._cachedNode !== undefined) return this._cachedNode;
+
+    const tryNode = (cmd: string): boolean => {
+      try {
+        const r = spawnSync(cmd, ['-e', 'process.stdout.write(process.versions.node||"")'], { encoding: 'utf8', timeout: 5000 });
+        return r.status === 0 && /^\d+\.\d+\.\d+/.test(r.stdout.trim());
+      } catch { return false; }
+    };
+
+    // 1. user override
+    const override = this.settings.nodeOverride.trim();
+    if (override && tryNode(override)) {
+      return (this._cachedNode = { cmd: override, kind: 'node' });
+    }
+
+    // 2. system node on PATH (and common locations)
+    const candidates = ['node'];
+    for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+      candidates.push(join(dir, process.platform === 'win32' ? 'node.exe' : 'node'));
+    }
+    for (const c of candidates) {
+      if (c !== 'node' && !existsSync(c)) continue;
+      if (tryNode(c)) {
+        return (this._cachedNode = { cmd: c, kind: 'node' });
+      }
+    }
+
+    // 3. Electron-as-Node (only if the fuse is enabled). Verify by actually
+    //    running it; if it fails or hangs, treat it as unusable.
+    try {
+      const r = spawnSync(process.execPath, ['-e', 'process.stdout.write(process.versions.node||"")'], {
+        encoding: 'utf8',
+        timeout: 5000,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      });
+      if (r.status === 0 && /^\d+\.\d+\.\d+/.test(r.stdout.trim())) {
+        return (this._cachedNode = { cmd: process.execPath, kind: 'electron-as-node' });
+      }
+    } catch { /* fall through */ }
+
+    return (this._cachedNode = null);
   }
 
   async activateView(): Promise<FrontdocsView | null> {
@@ -585,7 +631,7 @@ class FrontdocsSettingTab extends PluginSettingTab {
       .addText((t) =>
         t.setPlaceholder('e.g. C:\\Program Files\\nodejs\\node.exe or /usr/local/bin/node')
           .setValue(this.plugin.settings.nodeOverride)
-          .onChange(async (v) => { this.plugin.settings.nodeOverride = v.trim(); await this.plugin.saveSettings(); }),
+          .onChange(async (v) => { this.plugin.settings.nodeOverride = v.trim(); this.plugin._cachedNode = undefined; await this.plugin.saveSettings(); }),
       );
 
     containerEl.createEl('h3', { text: 'AI defaults' });
