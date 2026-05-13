@@ -23,14 +23,6 @@ jobs:
             arch: x64
             runner: ubuntu-latest
             ext: ''
-          - os: darwin
-            arch: arm64
-            runner: macos-latest
-            ext: ''
-          - os: darwin
-            arch: x64
-            runner: macos-13
-            ext: ''
 
     defaults:
       run:
@@ -70,9 +62,22 @@ jobs:
         run: |
           mv dist/frontdocs-mkdocs${{ matrix.ext }} dist/frontdocs-mkdocs-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
 
+      - name: Compute SHA-256 checksum
+        run: |
+          cd dist
+          asset="frontdocs-mkdocs-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
+          cat "$asset.sha256"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontdocs-mkdocs-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/frontdocs-mkdocs-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+          path: |
+            dist/frontdocs-mkdocs-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+            dist/frontdocs-mkdocs-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}.sha256
           if-no-files-found: error

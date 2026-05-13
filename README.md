@@ -84,13 +84,20 @@ Frontdocs looks for `<vault>/frontdocs.config.json`, then
 }
 ```
 
-## Windows blob
+## MkDocs sidecar blobs
 
-PyInstaller cannot cross-compile, so a self-contained
-`frontdocs-mkdocs.exe` is produced by the GitHub Actions workflow at
-[`.github/workflows/build-windows-blob.yml`](.github/workflows/build-windows-blob.yml).
-It runs on `windows-latest`, uploads the binary as an artifact, and
-attaches it to GitHub Releases on tag pushes.
+Frontdocs ships pre-built MkDocs sidecar binaries for **Linux x64** and
+**Windows x64** only. macOS is not supported in this release.
+
+PyInstaller cannot cross-compile, so the blobs are produced by the GitHub
+Actions workflow at
+[`.github/workflows/build-mkdocs-blobs.yml`](.github/workflows/build-mkdocs-blobs.yml).
+It runs on `windows-latest` and `ubuntu-latest`, computes a `.sha256` next
+to each binary, and uploads both as workflow artifacts. On a release tag
+those artifacts are attached to the GitHub Release.
+
+The Obsidian plugin pins the expected SHA-256 of every blob it ships and
+refuses to install or run a binary whose checksum does not match.
 
 ## License
 

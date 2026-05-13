@@ -22,6 +22,7 @@ import {
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, unlink, stat, rename, chmod, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { delimiter, join } from 'node:path';
 import { get as httpsGet } from 'node:https';
 
@@ -38,6 +39,19 @@ export const FRONTDOCS_VIEW_TYPE = 'frontdocs-view';
 // Where to fetch the MkDocs blob from. Pinned to the v0.5.0 release.
 const BLOB_RELEASE_TAG = 'v0.5.0';
 const BLOB_BASE_URL = `https://github.com/bagault/frontdocs/releases/download/${BLOB_RELEASE_TAG}`;
+
+// Pinned SHA-256 checksums for the MkDocs blob, keyed by `${platform}-${arch}`.
+// The plugin refuses to install or run a blob whose checksum does not match.
+// Update these values whenever a new release re-builds the blobs (see
+// `.github/workflows/build-mkdocs-blobs.yml`, which now also emits
+// `<asset>.sha256` files).
+const BLOB_CHECKSUMS: Record<string, string> = {
+  'win32-x64': '94da2b54b119e3c3e3e5fa46607b01d7239deeec12b3583a9ecdbb4a1ea47d79',
+  'linux-x64': 'fd58277ce4a93a000071e7535b18afd997848da05df92064b0a94ed06743c748',
+};
+
+// Supported `${platform}-${arch}` combinations for the MkDocs blob.
+const SUPPORTED_BLOB_PLATFORMS = new Set(Object.keys(BLOB_CHECKSUMS));
 
 // --------------------------------------------------------------------------
 // Settings
@@ -95,6 +109,21 @@ export default class FrontdocsPlugin extends Plugin {
 
   blobPath(): string {
     return join(this.blobsDir(), this.blobFilename());
+  }
+
+  /** Identifier for the current host's blob (`${platform}-${arch}`). */
+  blobPlatformId(): string {
+    return `${process.platform}-${process.arch}`;
+  }
+
+  /** Whether a blob is published + checksum-pinned for the current host. */
+  isBlobPlatformSupported(): boolean {
+    return SUPPORTED_BLOB_PLATFORMS.has(this.blobPlatformId());
+  }
+
+  /** Pinned SHA-256 for the current host's blob, or undefined if unsupported. */
+  blobExpectedSha256(): string | undefined {
+    return BLOB_CHECKSUMS[this.blobPlatformId()];
   }
 
   /** GitHub Release asset name for the current OS/arch. */
@@ -235,7 +264,7 @@ export default class FrontdocsPlugin extends Plugin {
       FRONTDOCS_VIEWER_JS: this.viewerJsPath(),
       PATH: pathWithCommonBins(process.env.PATH ?? ''),
     };
-    if (existsSync(this.blobPath())) {
+    if (existsSync(this.blobPath()) && this.isBlobPlatformSupported()) {
       env.FRONTDOCS_MKDOCS_BLOB = this.blobPath();
     }
 
@@ -387,6 +416,12 @@ function downloadFile(
   });
 }
 
+/** Compute the lowercase hex SHA-256 of a file. */
+async function sha256File(path: string): Promise<string> {
+  const buf = await readFile(path);
+  return createHash('sha256').update(buf).digest('hex');
+}
+
 // --------------------------------------------------------------------------
 // View
 // --------------------------------------------------------------------------
@@ -520,11 +555,26 @@ class FrontdocsView extends ItemView {
   private async refreshBlobStatus(): Promise<void> {
     const p = this.plugin.blobPath();
     const url = this.plugin.blobAssetUrl();
+    if (!this.plugin.isBlobPlatformSupported()) {
+      this.blobStatusEl.setText(
+        `unsupported platform (${this.plugin.blobPlatformId()}). ` +
+        `Frontdocs ships pinned MkDocs blobs only for: ${[...SUPPORTED_BLOB_PLATFORMS].join(', ')}.`,
+      );
+      return;
+    }
     if (existsSync(p)) {
       try {
         const s = await stat(p);
         const mb = (s.size / (1024 * 1024)).toFixed(1);
-        this.blobStatusEl.setText(`installed (${mb} MB) at ${p}`);
+        const expected = this.plugin.blobExpectedSha256();
+        let suffix = '';
+        if (expected) {
+          try {
+            const got = await sha256File(p);
+            suffix = got === expected ? ' — sha256 OK' : ' — sha256 MISMATCH (will be re-downloaded)';
+          } catch { suffix = ' — sha256 unreadable'; }
+        }
+        this.blobStatusEl.setText(`installed (${mb} MB) at ${p}${suffix}`);
       } catch { this.blobStatusEl.setText(`installed at ${p}`); }
     } else {
       this.blobStatusEl.setText(`not installed. Will download from ${url}`);
@@ -538,6 +588,20 @@ class FrontdocsView extends ItemView {
 
   private async downloadBlob(force: boolean): Promise<void> {
     if (this.currentChild) { new Notice('Frontdocs: a command is already running'); return; }
+    if (!this.plugin.isBlobPlatformSupported()) {
+      const msg = `Frontdocs: no MkDocs blob is published for ${this.plugin.blobPlatformId()}. ` +
+        `Supported: ${[...SUPPORTED_BLOB_PLATFORMS].join(', ')}.`;
+      this.appendLine(`\n[error] ${msg}\n`);
+      new Notice(msg, 10000);
+      return;
+    }
+    const expected = this.plugin.blobExpectedSha256();
+    if (!expected) {
+      const msg = 'Frontdocs: refusing to download blob — no pinned SHA-256 checksum is configured for this platform.';
+      this.appendLine(`\n[error] ${msg}\n`);
+      new Notice(msg, 10000);
+      return;
+    }
     const dir = this.plugin.blobsDir();
     const dest = this.plugin.blobPath();
     const url = this.plugin.blobAssetUrl();
@@ -550,7 +614,7 @@ class FrontdocsView extends ItemView {
         }
         await unlink(dest);
       }
-      this.appendLine(`\nDownloading ${url}\n  → ${dest}\n`);
+      this.appendLine(`\nDownloading ${url}\n  → ${dest}\n  expected sha256: ${expected}\n`);
       let lastPct = -1;
       const bytes = await downloadFile(url, dest, (recv, total) => {
         if (!total) return;
@@ -560,8 +624,16 @@ class FrontdocsView extends ItemView {
           this.appendLine(`  ${pct}% (${(recv / (1024 * 1024)).toFixed(1)} MB)\n`);
         }
       });
-      this.appendLine(`Downloaded ${(bytes / (1024 * 1024)).toFixed(1)} MB.\n`);
-      new Notice('Frontdocs: MkDocs blob installed');
+      const got = await sha256File(dest);
+      if (got !== expected) {
+        await unlink(dest).catch(() => {});
+        const msg = `checksum mismatch — expected ${expected}, got ${got}. The downloaded file has been deleted.`;
+        this.appendLine(`\n[error] ${msg}\n`);
+        new Notice(`Frontdocs: ${msg}`, 12000);
+        return;
+      }
+      this.appendLine(`Downloaded ${(bytes / (1024 * 1024)).toFixed(1)} MB.\nsha256 verified: ${got}\n`);
+      new Notice('Frontdocs: MkDocs blob installed and verified');
     } catch (e) {
       const msg = (e as Error).message;
       this.appendLine(`\n[error] download failed: ${msg}\n`);
